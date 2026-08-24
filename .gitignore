@@ -10,4 +10,17 @@ build/
 data/markdown/
 data/chunks/
 backend/data/chroma/
-data/raw_pdfs
+data/raw_pdfs/
+backend/data/markdown/
+backend/data/chunks/
+backend/data/raw_pdfs/
+
+# Next.js frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/.env.*.local
+frontend/*.tsbuildinfo
+frontend/ui_ux/
+frontend/prd/
