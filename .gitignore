@@ -9,3 +9,5 @@ build/
 *.egg-info/
 data/markdown/
 data/chunks/
+data/chroma/
+data/raw_pdfs
