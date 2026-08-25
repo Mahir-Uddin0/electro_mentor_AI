@@ -40,14 +40,40 @@ Put your Gemini API key in `.env`:
 
 ```env
 GEMINI_API_KEY=your-key
+
+# Conservative PDF-ingestion pacing. Check your active project limits in
+# Google AI Studio before increasing these values.
+GEMINI_EMBEDDING_BATCH_SIZE=5
+GEMINI_EMBEDDING_REQUESTS_PER_MINUTE=5
+GEMINI_EMBEDDING_TOKENS_PER_MINUTE=10000
+GEMINI_EMBEDDING_MAX_RETRIES=8
+GEMINI_EMBEDDING_RETRY_BASE_SECONDS=15
+GEMINI_EMBEDDING_RETRY_MAX_SECONDS=120
 ```
 
-### Supabase authentication and chat history
+The ingestion embedder spaces requests approximately 12 seconds apart at the
+default five-request-per-minute limit. It also splits large batches using a
+conservative local token estimate and enforces that estimated budget over a
+rolling minute. A Gemini `429`, timeout, or temporary server error is retried
+with exponential backoff, jitter, and the provider's `Retry-After` value when
+one is supplied. Runtime query embeddings do not use the slow ingestion
+limiter, so normal chat retrieval remains responsive.
+
+Gemini limits are enforced per project and can include requests per minute,
+tokens per minute, and requests per day. The local limiter cannot account for
+traffic from another process or API key in the same project, and it cannot
+create additional daily quota. Keep these settings below the active limits
+shown for your project in Google AI Studio; if the daily allowance is already
+exhausted, resume ingestion after the provider resets it.
+
+### Supabase authentication, chat history, and tasks
 
 Run `backend/supabase/chat_messages.sql` in the Supabase SQL editor. It creates
 the named-conversation and ordered-message tables, upgrades any rows from the
 old flat history schema, and installs ownership constraints, indexes, grants,
-triggers, and Row Level Security policies. Then configure `backend/.env`:
+triggers, and Row Level Security policies. Run `backend/supabase/tasks.sql` as
+well to create the user-owned task tracker table and its workflow trigger,
+grants, indexes, and RLS policies. Then configure `backend/.env`:
 
 ```env
 SUPABASE_URL=https://your-project-ref.supabase.co
@@ -56,6 +82,7 @@ SUPABASE_API_KEY=your-publishable-or-anon-key
 SUPABASE_JWT_SECRET=your-legacy-hs256-jwt-secret
 SUPABASE_CONVERSATIONS_TABLE=conversations
 SUPABASE_CHAT_MESSAGES_TABLE=chat_messages
+SUPABASE_TASKS_TABLE=tasks
 CHAT_HISTORY_MESSAGE_LIMIT=7
 ```
 
@@ -77,6 +104,10 @@ own conversations. Sending a message stores the user turn, loads only the latest
 seven prior messages from that conversation for Gemini, then stores the grounded
 assistant answer and its RAG citations. Opening a conversation returns its full
 stored history for the frontend.
+
+The authenticated `/api/v1/tasks` endpoints list, create, update, and delete
+only the current user's tasks. Task status advances from `upcoming` to
+`in_progress` to `completed`; active tasks are ordered by priority and due date.
 
 ### Ingest all PDFs
 
@@ -110,6 +141,26 @@ The endpoint at
 the persistent Chroma collection using a Gemini `RETRIEVAL_QUERY` embedding,
 combines it with the selected conversation's recent messages, and sends the
 grounded prompt to Gemini for answer generation and persistence.
+
+### Safety-checklist PDFs
+
+Place downloadable checklist PDFs in `backend/data/safety_checklist`. The
+authenticated `GET /api/v1/safety-checklists` endpoint discovers the directory
+on every request and returns filename-derived titles, PDF metadata, page counts,
+file sizes, categories, and stable document IDs. The authenticated
+`GET /api/v1/safety-checklists/{checklist_id}/file` endpoint opens the selected
+PDF inline; add `?download=true` to request attachment disposition. Adding or
+removing a PDF does not require a code change or database migration.
+
+### Wiring and circuit guide PDFs
+
+Place guide PDFs in `backend/data/wiring_circuit_guide_library`. The
+authenticated `GET /api/v1/guides` endpoint returns live PDF metadata and stable
+IDs; `GET /api/v1/guides/{guide_id}/file` streams the selected guide inline or
+as an attachment when called with `?download=true`. Filenames containing
+newlines or control characters are cleaned for display and download while the
+real filesystem path remains private. The frontend guide catalog, search,
+categories, sorting, viewer, and downloads all use these endpoints.
 
 ### Verify
 

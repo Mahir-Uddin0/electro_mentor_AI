@@ -34,6 +34,10 @@ class Settings(BaseSettings):
         default="chat_messages",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    supabase_tasks_table: str = Field(
+        default="tasks",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
     supabase_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 

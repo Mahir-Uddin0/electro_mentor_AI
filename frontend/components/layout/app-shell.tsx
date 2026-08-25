@@ -11,12 +11,12 @@ import {
   Download,
   Grid2X2,
   Languages,
+  ListChecks,
   LogOut,
   Menu,
   Moon,
   Search,
   Settings,
-  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -30,7 +30,7 @@ const navigation = [
   { label: "AI Assistant", href: "/assistant", icon: Bot },
   { label: "Photo Analysis", href: "/photo-analysis", icon: Camera },
   { label: "Safety Checklists", href: "/safety-checklists", icon: CheckSquare },
-  { label: "Practice Tracker", href: "/practice-tracker", icon: Sparkles },
+  { label: "Task Tracker", href: "/practice-tracker", icon: ListChecks },
 ];
 
 function getRouteTitle(pathname: string) {
@@ -38,7 +38,7 @@ function getRouteTitle(pathname: string) {
   if (pathname.startsWith("/assistant")) return ["AI Assistant", "Electrical mentor"];
   if (pathname.startsWith("/photo-analysis")) return ["Photo Analysis", "AI fault detection"];
   if (pathname.startsWith("/safety-checklists")) return ["Safety Checklists", "Safe workshop practice"];
-  if (pathname.startsWith("/practice-tracker")) return ["Practice Tracker", "Skills progress"];
+  if (pathname.startsWith("/practice-tracker")) return ["Task Tracker", "Work progress"];
   if (pathname.startsWith("/settings")) return ["Settings", "Account preferences"];
   if (pathname.startsWith("/assessments")) return ["Practical Assessment", "AI assessment"];
   return ["Dashboard", "AI platform"];

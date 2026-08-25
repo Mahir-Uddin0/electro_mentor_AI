@@ -2,97 +2,179 @@
 
 import {
   ArrowRight,
-  CheckSquare,
-  HardHat,
+  Download,
+  FileText,
   Search,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Badge, Card, LinkButton, PageHeading } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  LinkButton,
+  PageHeading,
+} from "@/components/ui";
+import {
+  frontendApi,
+  type SafetyChecklistDocument,
+} from "@/lib/api/client";
 
-const checklists = [
-  {
-    id: "house-wiring",
-    category: "House Wiring",
-    tone: "blue" as const,
-    title: "House Wiring Safety Checklist",
-    description: "Essential safety checks before, during, and after house wiring installation.",
-    items: 12,
-    ppe: 4,
-  },
-  {
-    id: "industrial-wiring",
-    category: "Industrial Wiring",
-    tone: "blue" as const,
-    title: "Industrial Wiring Safety Checklist",
-    description: "Comprehensive safety checklist for industrial electrical installations.",
-    items: 12,
-    ppe: 5,
-  },
-  {
-    id: "motor-installation",
-    category: "Motor Installation",
-    tone: "green" as const,
-    title: "Motor Installation Safety Checklist",
-    description: "Safety checklist for electric motor installation and commissioning.",
-    items: 10,
-    ppe: 4,
-  },
-  {
-    id: "workshop-safety",
-    category: "General Workshop Safety",
-    tone: "amber" as const,
-    title: "General Workshop Safety Checklist",
-    description: "Daily workshop safety checklist for all electrical work environments.",
-    items: 10,
-    ppe: 4,
-  },
-];
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function triggerDownload(url: string, filename: string) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
 
 export default function SafetyChecklistsPage() {
+  const [checklists, setChecklists] = useState<SafetyChecklistDocument[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All Categories");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void frontendApi
+      .listSafetyChecklists()
+      .then(({ documents }) => {
+        if (active) setChecklists(documents);
+      })
+      .catch((requestError) => {
+        if (active) {
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Safety checklists could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const categories = useMemo(
+    () => [...new Set(checklists.map((checklist) => checklist.category))],
+    [checklists],
+  );
   const visibleChecklists = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return checklists.filter((checklist) =>
-      (category === "All Categories" || checklist.category === category) &&
-      (!normalized || `${checklist.title} ${checklist.description} ${checklist.category}`.toLowerCase().includes(normalized)),
+    return checklists.filter(
+      (checklist) =>
+        (category === "All Categories" || checklist.category === category) &&
+        (!normalized ||
+          `${checklist.title} ${checklist.description} ${checklist.category}`
+            .toLowerCase()
+            .includes(normalized)),
     );
-  }, [category, query]);
+  }, [category, checklists, query]);
+
+  async function downloadChecklist(checklist: SafetyChecklistDocument) {
+    setError("");
+    setDownloadingId(checklist.id);
+    try {
+      const blob = await frontendApi.getSafetyChecklistFile(checklist.id, true);
+      const objectUrl = URL.createObjectURL(blob);
+      triggerDownload(objectUrl, checklist.filename);
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "The PDF could not be downloaded.",
+      );
+    } finally {
+      setDownloadingId(null);
+    }
+  }
 
   return (
     <>
       <PageHeading
-        title="Wiring & Circuit Guide Library"
-        description="Task-specific safety checks for electrical workshop practice."
-        action={<LinkButton href="/safety-checklists/generate" icon={Sparkles}>Generate with AI</LinkButton>}
+        title="Safety Checklist"
+        description="Open or download the latest safety-checklist PDFs provided by ElectroMentor."
+        action={
+          <LinkButton href="/safety-checklists/generate" icon={Sparkles}>
+            Generate with AI
+          </LinkButton>
+        }
       />
 
       <div className="filters">
         <label className="search-field">
           <Search size={17} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search checklists…" aria-label="Search checklists" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search checklists…"
+            aria-label="Search checklists"
+          />
         </label>
-        <select className="select-field" value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter by category">
+        <select
+          className="select-field"
+          value={category}
+          onChange={(event) => setCategory(event.target.value)}
+          aria-label="Filter by category"
+        >
           <option>All Categories</option>
-          {checklists.map((checklist) => <option key={checklist.id}>{checklist.category}</option>)}
+          {categories.map((item) => <option key={item}>{item}</option>)}
         </select>
       </div>
 
-      {visibleChecklists.length ? (
+      {error && <div className="auth-message error" style={{ marginBottom: 14 }}>{error}</div>}
+
+      {loading ? (
+        <div className="full-loader" style={{ minHeight: 300, background: "transparent" }}>
+          <span className="spinner" /> Loading safety checklists…
+        </div>
+      ) : visibleChecklists.length ? (
         <div className="checklist-grid">
           {visibleChecklists.map((checklist) => (
             <Card key={checklist.id} className="checklist-card">
-              <Badge tone={checklist.tone}>{checklist.category}</Badge>
+              <Badge tone="blue">{checklist.category}</Badge>
               <h3>{checklist.title}</h3>
               <p>{checklist.description}</p>
               <div className="card-meta">
-                <span><CheckSquare size={13} /> {checklist.items} items</span>
-                <span><HardHat size={13} /> {checklist.ppe} PPE</span>
+                <span>
+                  <FileText size={13} />
+                  {checklist.page_count
+                    ? `${checklist.page_count} pages`
+                    : "PDF document"}
+                </span>
+                <span>{formatFileSize(checklist.file_size_bytes)}</span>
               </div>
-              <LinkButton href={`/safety-checklists/house-wiring?template=${checklist.id}`} variant="secondary" icon={ArrowRight}>View</LinkButton>
+              <div className="checklist-card-actions">
+                <LinkButton
+                  href={`/safety-checklists/${checklist.id}`}
+                  variant="secondary"
+                  icon={ArrowRight}
+                >
+                  Open PDF
+                </LinkButton>
+                <Button
+                  variant="ghost"
+                  icon={Download}
+                  disabled={downloadingId === checklist.id}
+                  onClick={() => void downloadChecklist(checklist)}
+                >
+                  {downloadingId === checklist.id ? "Downloading…" : "Download"}
+                </Button>
+              </div>
             </Card>
           ))}
         </div>
@@ -101,7 +183,11 @@ export default function SafetyChecklistsPage() {
           <div className="empty-state">
             <span className="empty-icon"><ShieldCheck size={28} /></span>
             <h2>No checklists found</h2>
-            <p>Try a different search term or category.</p>
+            <p>
+              {checklists.length
+                ? "Try a different search term or category."
+                : "Add PDF files to backend/data/safety_checklist and reload this page."}
+            </p>
           </div>
         </Card>
       )}

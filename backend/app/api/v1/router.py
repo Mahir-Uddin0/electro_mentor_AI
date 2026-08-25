@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     health,
     photo_analysis,
     safety_checklists,
+    tasks,
 )
 
 api_router = APIRouter()
@@ -26,3 +27,4 @@ api_router.include_router(
     prefix="/safety-checklists",
     tags=["safety checklists"],
 )
+api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])

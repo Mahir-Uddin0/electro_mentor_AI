@@ -9,6 +9,10 @@ const backendUrl =
 const useMockApi = process.env.NEXT_PUBLIC_USE_MOCK_API !== "false";
 const useMockChatApi = process.env.NEXT_PUBLIC_USE_MOCK_CHAT_API === "true";
 const useMockPhotoApi = process.env.NEXT_PUBLIC_USE_MOCK_PHOTO_API === "true";
+const useMockChecklistApi =
+  process.env.NEXT_PUBLIC_USE_MOCK_CHECKLIST_API === "true";
+const useMockGuideApi = process.env.NEXT_PUBLIC_USE_MOCK_GUIDE_API === "true";
+const useMockTaskApi = process.env.NEXT_PUBLIC_USE_MOCK_TASK_API === "true";
 
 export class ApiError extends Error {
   constructor(
@@ -102,13 +106,54 @@ export type PhotoAnalysisResult = {
   analyzed_at: string;
 };
 
-export async function apiRequest<T>(
+export type PdfLibraryDocument = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  filename: string;
+  page_count: number | null;
+  file_size_bytes: number;
+  updated_at: string;
+};
+
+export type SafetyChecklistDocument = PdfLibraryDocument;
+export type GuideDocument = PdfLibraryDocument;
+
+export type TaskStatus = "upcoming" | "in_progress" | "completed";
+export type TaskPriority = "high" | "medium" | "low";
+
+export type Task = {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type CreateTaskInput = {
+  title: string;
+  description?: string;
+  status: Exclude<TaskStatus, "completed">;
+  priority: TaskPriority;
+  due_date?: string | null;
+};
+
+export type UpdateTaskInput = Partial<
+  Pick<Task, "title" | "description" | "status" | "priority" | "due_date">
+>;
+
+async function apiFetch(
   path: string,
-  init: RequestInit = {},
-  options: { useMock?: boolean } = {},
-): Promise<T> {
+  init: RequestInit,
+  useMock: boolean,
+): Promise<Response> {
   const normalizedPath = path.replace(/^\//, "");
-  const useMock = options.useMock ?? useMockApi;
   const url = useMock
     ? `/api/mock/${normalizedPath}`
     : `${backendUrl}/api/v1/${normalizedPath}`;
@@ -117,7 +162,7 @@ export async function apiRequest<T>(
     throw new ApiError("Your session expired. Please sign in again.", 401);
   }
   const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
   const isFormData =
     typeof FormData !== "undefined" && init.body instanceof FormData;
   if (init.body && !isFormData && !headers.has("Content-Type")) {
@@ -133,19 +178,60 @@ export async function apiRequest<T>(
   if (!response.ok) {
     let message = "The request could not be completed.";
     try {
-      const body = (await response.json()) as { detail?: string; message?: string };
+      const body = (await response.json()) as {
+        detail?: string;
+        message?: string;
+      };
       message = body.detail ?? body.message ?? message;
     } catch {}
     throw new ApiError(message, response.status);
   }
+  return response;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  options: { useMock?: boolean } = {},
+): Promise<T> {
+  const useMock = options.useMock ?? useMockApi;
+  const response = await apiFetch(path, init, useMock);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
+export async function apiBlobRequest(
+  path: string,
+  init: RequestInit = {},
+  options: { useMock?: boolean } = {},
+): Promise<Blob> {
+  const useMock = options.useMock ?? useMockApi;
+  const response = await apiFetch(path, init, useMock);
+  return response.blob();
+}
+
 export const frontendApi = {
   dashboard: () => apiRequest<{ greeting: string }>("dashboard"),
-  guides: () => apiRequest<{ total: number }>("guides"),
-  tasks: () => apiRequest<{ total: number; completed: number }>("tasks"),
+  listTasks: () =>
+    apiRequest<{ tasks: Task[] }>("tasks", {}, { useMock: useMockTaskApi }),
+  createTask: (task: CreateTaskInput) =>
+    apiRequest<Task>(
+      "tasks",
+      { method: "POST", body: JSON.stringify(task) },
+      { useMock: useMockTaskApi },
+    ),
+  updateTask: (taskId: string, task: UpdateTaskInput) =>
+    apiRequest<Task>(
+      `tasks/${encodeURIComponent(taskId)}`,
+      { method: "PATCH", body: JSON.stringify(task) },
+      { useMock: useMockTaskApi },
+    ),
+  deleteTask: (taskId: string) =>
+    apiRequest<void>(
+      `tasks/${encodeURIComponent(taskId)}`,
+      { method: "DELETE" },
+      { useMock: useMockTaskApi },
+    ),
   analyzePhoto: (image: File) => {
     const body = new FormData();
     body.append("image", image, image.name);
@@ -159,6 +245,30 @@ export const frontendApi = {
       method: "POST",
       body: JSON.stringify({ task }),
     }),
+  listSafetyChecklists: () =>
+    apiRequest<{ documents: SafetyChecklistDocument[] }>(
+      "safety-checklists",
+      {},
+      { useMock: useMockChecklistApi },
+    ),
+  getSafetyChecklistFile: (checklistId: string, download = false) =>
+    apiBlobRequest(
+      `safety-checklists/${encodeURIComponent(checklistId)}/file?download=${download}`,
+      { headers: { Accept: "application/pdf" } },
+      { useMock: useMockChecklistApi },
+    ),
+  listGuides: () =>
+    apiRequest<{ documents: GuideDocument[] }>(
+      "guides",
+      {},
+      { useMock: useMockGuideApi },
+    ),
+  getGuideFile: (guideId: string, download = false) =>
+    apiBlobRequest(
+      `guides/${encodeURIComponent(guideId)}/file?download=${download}`,
+      { headers: { Accept: "application/pdf" } },
+      { useMock: useMockGuideApi },
+    ),
   listConversations: () =>
     apiRequest<{ conversations: ConversationSummary[] }>(
       "conversations",

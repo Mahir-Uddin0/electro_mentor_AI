@@ -24,13 +24,16 @@ NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_USE_MOCK_API=true
 NEXT_PUBLIC_USE_MOCK_CHAT_API=false
 NEXT_PUBLIC_USE_MOCK_PHOTO_API=false
+NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=false
+NEXT_PUBLIC_USE_MOCK_GUIDE_API=false
+NEXT_PUBLIC_USE_MOCK_TASK_API=false
 ```
 
 Only the Supabase URL and publishable/anon key belong in the browser. Never place the Supabase JWT secret or service-role key in a `NEXT_PUBLIC_` variable.
 
 In Supabase **Authentication → URL Configuration**, set the local site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` as an allowed redirect URL. Add the equivalent HTTPS callback before deploying.
 
-`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard, guide, task, and checklist endpoints. Conversation history and photo analysis have separate `NEXT_PUBLIC_USE_MOCK_CHAT_API` and `NEXT_PUBLIC_USE_MOCK_PHOTO_API` switches, so those features can use FastAPI while the remaining screens use preview data. Keep both feature switches `false` for the real authenticated APIs.
+`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, and the task tracker have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
 
 The API client asks Supabase for a current session before every real backend
 request. Supabase refreshes an expired access token when possible; a failed
@@ -51,7 +54,18 @@ Conversation history uses these FastAPI routes under `/api/v1`:
 
 Photo fault detection sends an authenticated multipart request to `POST /photo-analysis` with the selected file in the `image` field. Accepted formats are JPG, PNG, WebP, HEIC, and HEIF up to 14 MB. Completed reports are retained only for the current user and browser session; the backend does not persist photo reports yet.
 
-The remaining temporary frontend contract expects `GET /dashboard`, `GET /guides`, `GET /tasks`, and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
+The safety-checklist library loads live PDF metadata from `GET /safety-checklists` and fetches a selected file from `GET /safety-checklists/{checklist_id}/file`. Both requests carry the current Supabase access token. PDFs can be viewed inside the application or downloaded without exposing a server filesystem path.
+
+The wiring and circuit guide library follows the same authenticated flow through `GET /guides` and `GET /guides/{guide_id}/file`. Titles, descriptions, categories, page counts, file sizes, update times, and IDs come from the backend PDF catalog rather than static frontend data.
+
+The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
+
+- `GET /tasks` and `POST /tasks`
+- `PATCH /tasks/{task_id}` and `DELETE /tasks/{task_id}`
+
+Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in Supabase through FastAPI.
+
+The remaining temporary frontend contract expects `GET /dashboard` and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
 
 ## Product routes
 
