@@ -1,37 +1,256 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  const path = (await params).path.join("/");
+type MockMessage = {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  sources?: Array<{ title: string }>;
+};
+
+type MockConversation = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message: string | null;
+  message_count: number;
+  messages: MockMessage[];
+};
+
+const mockGlobal = globalThis as typeof globalThis & {
+  __electroMentorConversations?: Map<string, MockConversation>;
+};
+
+function makeSeedConversation(
+  id: string,
+  title: string,
+  question: string,
+  answer: string,
+  createdAt: string,
+): MockConversation {
+  const messages: MockMessage[] = [
+    { id: `${id}-user`, conversation_id: id, role: "user", content: question, created_at: createdAt },
+    {
+      id: `${id}-assistant`,
+      conversation_id: id,
+      role: "assistant",
+      content: answer,
+      created_at: createdAt,
+      sources: [{ title: "Electrical workshop safety guide" }],
+    },
+  ];
+  return {
+    id,
+    title,
+    created_at: createdAt,
+    updated_at: createdAt,
+    last_message: answer,
+    message_count: messages.length,
+    messages,
+  };
+}
+
+function getConversationStore() {
+  if (!mockGlobal.__electroMentorConversations) {
+    const seeds = [
+      makeSeedConversation(
+        "mock-motor-starter",
+        "Motor starter troubleshooting",
+        "Why does my MCB trip when the motor starts?",
+        "A motor can briefly draw several times its rated current at startup. First isolate the supply, then check the MCB curve and rating, loose terminals, overload setting, cable size, and whether the motor is mechanically jammed.",
+        "2026-08-24T08:30:00.000Z",
+      ),
+      makeSeedConversation(
+        "mock-house-wiring",
+        "House wiring safety",
+        "What should I check before installing a socket?",
+        "Confirm the circuit is isolated and proved dead, verify conductor size and protective-device rating, identify line/neutral/earth correctly, inspect the enclosure, and test continuity, polarity, insulation resistance, and RCD operation before energizing.",
+        "2026-08-23T11:15:00.000Z",
+      ),
+      makeSeedConversation(
+        "mock-rccb-testing",
+        "Testing an RCCB",
+        "Show me the correct RCCB testing sequence.",
+        "Start with the manufacturer test button, then use a calibrated RCD tester at the required current and phase settings. Record trip times and compare them with the applicable standard. Only trained persons should perform live tests.",
+        "2026-08-21T09:00:00.000Z",
+      ),
+    ];
+    mockGlobal.__electroMentorConversations = new Map(
+      seeds.map((conversation) => [conversation.id, conversation]),
+    );
+  }
+  return mockGlobal.__electroMentorConversations;
+}
+
+function summary(conversation: MockConversation) {
+  const { messages: _messages, ...conversationSummary } = conversation;
+  return conversationSummary;
+}
+
+function titleFromMessage(message: string) {
+  const words = message.trim().split(/\s+/).slice(0, 7).join(" ");
+  return words.length < message.trim().length ? `${words}…` : words;
+}
+
+function mockAssistantAnswer(message: string) {
+  return `For “${message}”, begin by isolating the supply and verifying that the circuit is de-energized. Inspect the protective device, cable sizing, terminations, earthing, and the connected load against the wiring guide. This preview answer is stored in the mock conversation just like a real backend response.`;
+}
+
+type RouteContext = { params: Promise<{ path: string[] }> };
+
+export async function GET(_request: NextRequest, { params }: RouteContext) {
+  const segments = (await params).path;
+  const path = segments.join("/");
   const responses: Record<string, object> = {
     dashboard: { greeting: "Welcome back, Prince!" },
     guides: { total: 24 },
     tasks: { total: 4, completed: 1 },
-    "chat/history": { user_id: "preview-user", messages: [] },
   };
+
+  if (path === "conversations") {
+    const conversations = [...getConversationStore().values()]
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .map(summary);
+    return NextResponse.json({ conversations });
+  }
+
+  if (segments[0] === "conversations" && segments.length === 2) {
+    const conversation = getConversationStore().get(segments[1]);
+    if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+    return NextResponse.json(conversation);
+  }
+
   return NextResponse.json(responses[path] ?? { ok: true, path });
 }
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> },
-) {
-  const path = (await params).path.join("/");
-  const body = (await request.json().catch(() => ({}))) as Record<string, string>;
-  if (path === "chat") {
+export async function POST(request: NextRequest, { params }: RouteContext) {
+  const segments = (await params).path;
+  const path = segments.join("/");
+
+  if (path === "photo-analysis") {
+    const formData = await request.formData().catch(() => null);
+    const image = formData?.get("image");
+    if (!(image instanceof File)) {
+      return NextResponse.json({ detail: "Upload an image in the 'image' field." }, { status: 422 });
+    }
     return NextResponse.json({
-      answer:
-        "Start by isolating the supply, verify the circuit is de-energized, and inspect each connection against the wiring guide. This is a preview response from the frontend mock API.",
-      sources: [{ title: "Electrical workshop safety guide" }],
+      analysis_id: `AN-${crypto.randomUUID().slice(0, 8)}`,
+      status: "completed",
+      outcome: "faults_detected",
+      summary: "The preview analyzer found a potentially loose terminal connection that should be checked after the circuit is safely isolated.",
+      primary_fault: {
+        title: "Possible loose terminal connection",
+        description: "A conductor appears incompletely seated at a visible terminal.",
+        severity: "high",
+        confidence: 91,
+        location: "Visible terminal block",
+        possible_cause: "The terminal may not have been tightened correctly or may have loosened after thermal cycling.",
+        repair_steps: [
+          "Isolate the circuit at its source and apply lockout/tagout.",
+          "Prove the circuit is de-energized with an approved tester.",
+          "Ask a qualified electrician to inspect and correctly terminate the conductor.",
+        ],
+        safety_warning: "Do not touch or tighten visible conductors while the circuit may be energized.",
+        required_ppe: ["Insulated gloves", "Safety goggles"],
+        required_tools: ["Approved voltage tester", "Torque screwdriver"],
+        estimated_repair_time: "15–30 minutes after safe isolation",
+      },
+      other_faults: [],
+      upload_guidance: {
+        reason: null,
+        recommended_photos: [],
+        photo_tips: ["Include a wider view showing the enclosure and cable routing."],
+      },
+      analyzed_at: new Date().toISOString(),
     });
   }
-  if (path === "photo-analysis") {
-    return NextResponse.json({ analysisId: "AN-1042", status: "complete" });
+
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (path === "conversations") {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const suppliedTitle = typeof body.title === "string" ? body.title.trim() : "";
+    const conversation: MockConversation = {
+      id,
+      title: suppliedTitle || "New conversation",
+      created_at: now,
+      updated_at: now,
+      last_message: null,
+      message_count: 0,
+      messages: [],
+    };
+    getConversationStore().set(id, conversation);
+    return NextResponse.json(summary(conversation), { status: 201 });
   }
+
+  if (segments[0] === "conversations" && segments.length === 3 && segments[2] === "messages") {
+    const conversation = getConversationStore().get(segments[1]);
+    if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+    const content = typeof body.message === "string" ? body.message.trim() : "";
+    if (!content) return NextResponse.json({ detail: "Message cannot be empty." }, { status: 422 });
+
+    const createdAt = new Date().toISOString();
+    const userMessage: MockMessage = {
+      id: crypto.randomUUID(),
+      conversation_id: conversation.id,
+      role: "user",
+      content,
+      created_at: createdAt,
+    };
+    const sources = [{ title: "Electrical workshop safety guide" }];
+    const assistantMessage: MockMessage = {
+      id: crypto.randomUUID(),
+      conversation_id: conversation.id,
+      role: "assistant",
+      content: mockAssistantAnswer(content),
+      created_at: new Date().toISOString(),
+      sources,
+    };
+    conversation.messages.push(userMessage, assistantMessage);
+    conversation.updated_at = assistantMessage.created_at;
+    conversation.last_message = assistantMessage.content;
+    conversation.message_count = conversation.messages.length;
+    if (conversation.title === "New conversation") conversation.title = titleFromMessage(content);
+
+    return NextResponse.json({
+      conversation_id: conversation.id,
+      user_message: userMessage,
+      assistant_message: assistantMessage,
+      sources,
+    });
+  }
+
   if (path === "checklists/generate") {
-    return NextResponse.json({ id: "CHK-204", title: body.task ?? "Safety checklist" });
+    return NextResponse.json({ id: "CHK-204", title: typeof body.task === "string" ? body.task : "Safety checklist" });
   }
   return NextResponse.json({ ok: true, path, received: body });
+}
+
+export async function PATCH(request: NextRequest, { params }: RouteContext) {
+  const segments = (await params).path;
+  if (segments[0] !== "conversations" || segments.length !== 2) {
+    return NextResponse.json({ detail: "Not found." }, { status: 404 });
+  }
+  const conversation = getConversationStore().get(segments[1]);
+  if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) return NextResponse.json({ detail: "Title cannot be empty." }, { status: 422 });
+  conversation.title = title;
+  conversation.updated_at = new Date().toISOString();
+  return NextResponse.json(summary(conversation));
+}
+
+export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+  const segments = (await params).path;
+  if (segments[0] !== "conversations" || segments.length !== 2) {
+    return NextResponse.json({ detail: "Not found." }, { status: 404 });
+  }
+  if (!getConversationStore().delete(segments[1])) {
+    return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+  }
+  return new NextResponse(null, { status: 204 });
 }

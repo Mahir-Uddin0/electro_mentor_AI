@@ -22,17 +22,36 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_USE_MOCK_API=true
+NEXT_PUBLIC_USE_MOCK_CHAT_API=false
+NEXT_PUBLIC_USE_MOCK_PHOTO_API=false
 ```
 
 Only the Supabase URL and publishable/anon key belong in the browser. Never place the Supabase JWT secret or service-role key in a `NEXT_PUBLIC_` variable.
 
 In Supabase **Authentication → URL Configuration**, set the local site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` as an allowed redirect URL. Add the equivalent HTTPS callback before deploying.
 
-Set `NEXT_PUBLIC_USE_MOCK_API=false` when the FastAPI endpoints are ready. The API client reads the current Supabase session and sends `Authorization: Bearer <access_token>` on backend requests.
+`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard, guide, task, and checklist endpoints. Conversation history and photo analysis have separate `NEXT_PUBLIC_USE_MOCK_CHAT_API` and `NEXT_PUBLIC_USE_MOCK_PHOTO_API` switches, so those features can use FastAPI while the remaining screens use preview data. Keep both feature switches `false` for the real authenticated APIs.
 
-The existing FastAPI verifier is configured for a legacy `HS256` JWT secret. If the Supabase project uses the newer asymmetric signing-key system, update the backend to validate against the project's JWKS endpoint before disabling mock mode.
+The API client asks Supabase for a current session before every real backend
+request. Supabase refreshes an expired access token when possible; a failed
+refresh, missing session, or backend `401` clears the browser session and sends
+the user to `/login?reason=session_expired`. An expired token is never attached
+to a FastAPI request. Preview login works only with the mock chat API.
 
-The temporary frontend contract expects these FastAPI routes under `/api/v1`: `GET /dashboard`, `GET /guides`, `GET /tasks`, `POST /chat`, `POST /photo-analysis`, and `POST /checklists/generate`. While mock mode is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
+FastAPI accepts legacy `HS256` tokens when `SUPABASE_JWT_SECRET` is configured
+and current `ES256`/`RS256` tokens through Supabase's cached public JWKS. The
+project's signing key can therefore rotate without forcing the browser to reuse
+an obsolete token.
+
+Conversation history uses these FastAPI routes under `/api/v1`:
+
+- `GET /conversations` and `POST /conversations`
+- `GET`, `PATCH`, and `DELETE /conversations/{conversation_id}`
+- `POST /conversations/{conversation_id}/messages`
+
+Photo fault detection sends an authenticated multipart request to `POST /photo-analysis` with the selected file in the `image` field. Accepted formats are JPG, PNG, WebP, HEIC, and HEIF up to 14 MB. Completed reports are retained only for the current user and browser session; the backend does not persist photo reports yet.
+
+The remaining temporary frontend contract expects `GET /dashboard`, `GET /guides`, `GET /tasks`, and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
 
 ## Product routes
 

@@ -21,7 +21,6 @@ def make_client(models: FakeAsyncModels) -> GeminiLLMClient:
     client = object.__new__(GeminiLLMClient)
     client._client = SimpleNamespace(aio=SimpleNamespace(models=models))
     client._model = "gemini-3.7-flash"
-    client._temperature = 0.2
     client._max_output_tokens = 2_048
     client._max_retries = 1
     return client
@@ -54,7 +53,7 @@ def test_complete_maps_chat_messages_to_gemini_content() -> None:
     ]
     config = call["config"]
     assert config.system_instruction == "Use only supplied context."
-    assert config.temperature == 0.2
+    assert config.temperature is None
     assert config.max_output_tokens == 2_048
 
 

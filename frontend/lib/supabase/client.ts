@@ -15,7 +15,13 @@ let browserClient: SupabaseClient | null = null;
 export function getSupabaseBrowserClient(): SupabaseClient | null {
   if (!isSupabaseConfigured) return null;
   if (!browserClient) {
-    browserClient = createBrowserClient(supabaseUrl!, publishableKey!);
+    browserClient = createBrowserClient(supabaseUrl!, publishableKey!, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
+    });
   }
   return browserClient;
 }

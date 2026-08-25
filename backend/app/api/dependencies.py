@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
 from app.core.security import (
+    AccessTokenVerificationUnavailableError,
     AuthenticatedUser,
     InvalidAccessTokenError,
     verify_supabase_access_token,
@@ -40,7 +41,7 @@ def get_current_user(
 ) -> AuthenticatedUser:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise _unauthorized("A Supabase access token is required")
-    if not settings.supabase_jwt_secret or not settings.supabase_url:
+    if not settings.supabase_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Supabase authentication is not configured.",
@@ -52,6 +53,11 @@ def get_current_user(
             jwt_secret=settings.supabase_jwt_secret,
             supabase_url=settings.supabase_url,
         )
+    except AccessTokenVerificationUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supabase authentication is temporarily unavailable.",
+        ) from exc
     except InvalidAccessTokenError as exc:
         raise _unauthorized("The Supabase access token is invalid or expired") from exc
 

@@ -1,7 +1,8 @@
 from functools import lru_cache
+from uuid import UUID, uuid4
 
 from app.core.config import get_settings
-from app.schemas.chat import ChatRequest, ChatResponse, Source
+from app.schemas.chat import ChatRequest, ChatResponse, Message, Source
 from app.services.llm import LLMClient, get_llm_client
 from app.services.retriever import Retriever, get_retriever
 
@@ -18,9 +19,22 @@ class ChatService:
         self._llm = llm
 
     async def answer(self, request: ChatRequest) -> ChatResponse:
+        return await self.generate(
+            message=request.message,
+            conversation_id=request.conversation_id or uuid4(),
+            history=request.history,
+        )
+
+    async def generate(
+        self,
+        *,
+        message: str,
+        conversation_id: UUID,
+        history: list[Message],
+    ) -> ChatResponse:
         settings = get_settings()
         documents = await self._retriever.search(
-            request.message, top_k=settings.retrieval_top_k
+            message, top_k=settings.retrieval_top_k
         )
         context = "\n\n".join(
             f"[{document.id}] {document.title}\n{document.content}"
@@ -28,15 +42,15 @@ class ChatService:
         ) or "No relevant documents were retrieved."
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            *[message.model_dump() for message in request.history],
+            *[history_message.model_dump() for history_message in history],
             {
                 "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion:\n{request.message}",
+                "content": f"Context:\n{context}\n\nQuestion:\n{message}",
             },
         ]
         answer = await self._llm.complete(messages)
         return ChatResponse(
-            conversation_id=request.conversation_id,
+            conversation_id=conversation_id,
             answer=answer,
             sources=[
                 Source(

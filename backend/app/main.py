@@ -8,14 +8,18 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.services.chat_history import close_chat_history_service
+from app.services.conversations import close_conversation_repository
 from app.services.llm import close_llm_client
+from app.services.photo_analysis import close_photo_analysis_service
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
+    await close_conversation_repository()
     await close_chat_history_service()
     await close_llm_client()
+    await close_photo_analysis_service()
 
 
 def create_app() -> FastAPI:

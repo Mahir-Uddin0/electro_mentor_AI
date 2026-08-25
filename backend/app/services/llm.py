@@ -28,7 +28,6 @@ class GeminiLLMClient:
 
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.gemini_generation_model
-        self._temperature = settings.gemini_generation_temperature
         self._max_output_tokens = settings.gemini_generation_max_output_tokens
         self._max_retries = settings.gemini_generation_max_retries
 
@@ -51,7 +50,6 @@ class GeminiLLMClient:
 
         config = types.GenerateContentConfig(
             system_instruction=system_instruction or None,
-            temperature=self._temperature,
             max_output_tokens=self._max_output_tokens,
         )
         response = await self._generate_with_retry(contents, config)
