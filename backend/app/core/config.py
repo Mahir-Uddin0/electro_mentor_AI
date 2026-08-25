@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_api_key: str | None = None
     supabase_jwt_secret: str | None = None
+    supabase_conversations_table: str = Field(
+        default="conversations",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
     supabase_chat_messages_table: str = Field(
         default="chat_messages",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
@@ -35,9 +39,18 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     gemini_generation_model: str = "gemini-3.7-flash"
-    gemini_generation_temperature: float = Field(default=0.2, ge=0, le=2)
     gemini_generation_max_output_tokens: int = Field(default=2_048, ge=1, le=65_536)
     gemini_generation_max_retries: int = Field(default=3, ge=1, le=6)
+    gemini_vision_model: str = "gemini-3.7-flash"
+    gemini_vision_max_output_tokens: int = Field(
+        default=4_096, ge=1, le=65_536
+    )
+    # Inline Gemini requests must remain below 20 MB after base64 encoding.
+    photo_analysis_max_image_bytes: int = Field(
+        default=14_000_000,
+        ge=1,
+        le=14_000_000,
+    )
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=768, le=768)
     gemini_embedding_batch_size: int = Field(default=50, ge=1, le=100)

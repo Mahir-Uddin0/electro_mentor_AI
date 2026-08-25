@@ -30,7 +30,10 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("error") === "confirmation_failed") {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("reason") === "session_expired") {
+      setError("Your session expired. Please sign in again.");
+    } else if (searchParams.get("error") === "confirmation_failed") {
       setError("The email confirmation link is invalid or has expired. Please try signing in again.");
     }
     if (!loading && session) router.replace(requestedPath());

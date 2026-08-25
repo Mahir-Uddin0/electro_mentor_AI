@@ -1,35 +1,37 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Camera,
-  ChevronRight,
-  Eye,
   FileImage,
   ImagePlus,
   ScanLine,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
-import { Badge, Button, Card, PageHeading, SectionTitle } from "@/components/ui";
+import { useAuth } from "@/components/auth/auth-provider";
+import { RecentPhotoAnalyses } from "@/components/photo-analysis/recent-analyses";
+import { Button, Card, PageHeading } from "@/components/ui";
 import { frontendApi } from "@/lib/api/client";
+import type { PhotoAnalysisResult } from "@/lib/api/client";
+import {
+  clearPendingPhoto,
+  getPendingPhoto,
+  listStoredPhotoAnalyses,
+  PHOTO_INPUT_ACCEPT,
+  preparePhotoFile,
+  storePendingPhoto,
+  storePhotoAnalysisResult,
+} from "@/lib/photo-analysis";
 
 type PhotoDetails = {
+  file: File;
   url: string;
   name: string;
   size: number;
   type: string;
 };
-
-const previousAnalyses = [
-  { id: "AN-1039", title: "Exposed Live Wire", date: "2025-01-10", severity: "Critical", confidence: "99%" },
-  { id: "AN-1040", title: "Overloaded Circuit", date: "2025-01-08", severity: "High", confidence: "91%" },
-  { id: "AN-1041", title: "Missing Ground Connection", date: "2025-01-05", severity: "High", confidence: "87%" },
-  { id: "AN-1038", title: "Loose Neutral Wire", date: "2025-01-02", severity: "High", confidence: "96%" },
-];
 
 function formatBytes(bytes: number) {
   if (!bytes) return "—";
@@ -39,69 +41,86 @@ function formatBytes(bytes: number) {
 
 export default function PhotoReviewPage() {
   const router = useRouter();
+  const { user } = useAuth();
+  const ownerId = user?.id ?? "preview";
   const inputRef = useRef<HTMLInputElement>(null);
   const [photo, setPhoto] = useState<PhotoDetails | null>(null);
-  const [sample, setSample] = useState(false);
+  const [restoringPhoto, setRestoringPhoto] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [previousAnalyses, setPreviousAnalyses] = useState<PhotoAnalysisResult[]>([]);
 
   useEffect(() => {
-    const url = sessionStorage.getItem("electromentor.photo.url");
-    if (!url) return;
-    setPhoto({
-      url,
-      name: sessionStorage.getItem("electromentor.photo.name") ?? "wiring-photo.jpg",
-      size: Number(sessionStorage.getItem("electromentor.photo.size") ?? 0),
-      type: sessionStorage.getItem("electromentor.photo.type") ?? "image/jpeg",
+    let active = true;
+    setPreviousAnalyses(listStoredPhotoAnalyses(ownerId));
+    void getPendingPhoto(ownerId).then((file) => {
+      if (!active) return;
+      if (file) {
+        setPhoto({
+          file,
+          url: URL.createObjectURL(file),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        });
+      }
+      setRestoringPhoto(false);
     });
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [ownerId]);
 
-  function storePhoto(file: File) {
+  useEffect(() => {
+    return () => {
+      if (photo?.url.startsWith("blob:")) URL.revokeObjectURL(photo.url);
+    };
+  }, [photo]);
+
+  async function replacePhoto(selectedFile: File) {
     setError("");
-    if (!file.type.startsWith("image/")) {
-      setError("Please select an image file.");
+    const { file, error: validationError } = preparePhotoFile(selectedFile);
+    if (!file) {
+      setError(validationError ?? "Choose a supported wiring photo.");
       return;
     }
-    if (file.size > 20 * 1024 * 1024) {
-      setError("The selected image is larger than 20 MB.");
-      return;
+    try {
+      await storePendingPhoto(ownerId, file);
+      setPhoto({
+        file,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+    } catch {
+      setError("The photo could not be prepared. Please select it again.");
     }
-    if (photo?.url.startsWith("blob:")) URL.revokeObjectURL(photo.url);
-    const url = URL.createObjectURL(file);
-    const next = { url, name: file.name, size: file.size, type: file.type || "image/*" };
-    setPhoto(next);
-    setSample(false);
-    sessionStorage.setItem("electromentor.photo.url", url);
-    sessionStorage.setItem("electromentor.photo.name", file.name);
-    sessionStorage.setItem("electromentor.photo.size", String(file.size));
-    sessionStorage.setItem("electromentor.photo.type", next.type);
   }
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (file) storePhoto(file);
+    if (file) void replacePhoto(file);
     event.target.value = "";
   }
 
   function removePhoto() {
-    if (photo?.url.startsWith("blob:")) URL.revokeObjectURL(photo.url);
     setPhoto(null);
-    setSample(false);
-    ["url", "name", "size", "type"].forEach((key) =>
-      sessionStorage.removeItem(`electromentor.photo.${key}`),
-    );
+    void clearPendingPhoto(ownerId);
   }
 
-  async function analyze(useSample = false) {
-    if (!photo && !sample && !useSample) {
-      setError("Select a photo or use the sample analysis first.");
+  async function analyze() {
+    if (!photo) {
+      setError("Select a wiring photo before starting the analysis.");
       return;
     }
     setError("");
     setLoading(true);
     try {
-      const result = await frontendApi.analyzePhoto();
-      router.push(`/photo-analysis/results/${result.analysisId}`);
+      const result = await frontendApi.analyzePhoto(photo.file);
+      storePhotoAnalysisResult(ownerId, result);
+      await clearPendingPhoto(ownerId);
+      router.push(`/photo-analysis/results/${result.analysis_id}`);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Analysis could not be started.");
     } finally {
@@ -109,17 +128,12 @@ export default function PhotoReviewPage() {
     }
   }
 
-  function showSample() {
-    removePhoto();
-    setSample(true);
-  }
-
   return (
     <>
       <PageHeading
         title="Review wiring photo"
         description="Confirm that the important wiring details are visible before analysis."
-        action={<Button variant="secondary" icon={ImagePlus} onClick={() => inputRef.current?.click()}>Replace Photo</Button>}
+        action={<Button variant="secondary" icon={ImagePlus} disabled={loading} onClick={() => inputRef.current?.click()}>Replace Photo</Button>}
       />
 
       <Card className="analysis-layout">
@@ -130,10 +144,9 @@ export default function PhotoReviewPage() {
               alt="Selected wiring preview"
               style={{ width: "100%", height: "100%", maxHeight: 470, objectFit: "contain", borderRadius: 10 }}
             />
-          ) : sample ? (
-            <div style={{ display: "grid", justifyItems: "center", gap: 13 }}>
-              <div className="wire-illustration" />
-              <Badge tone="blue">Sample wiring photo</Badge>
+          ) : restoringPhoto ? (
+            <div className="full-loader" style={{ minHeight: 300, background: "transparent" }}>
+              <span className="spinner" /> Loading selected photo…
             </div>
           ) : (
             <button
@@ -144,16 +157,16 @@ export default function PhotoReviewPage() {
             >
               <span className="upload-icon"><Camera size={27} /></span>
               <h2>Select a wiring photo</h2>
-              <p>JPG, PNG, HEIC · Max 20MB</p>
+              <p>JPG, PNG, WebP, HEIC, HEIF · Max 14MB</p>
             </button>
           )}
         </div>
 
         <div className="file-summary">
           <h2>Photo details</h2>
-          <div className="key-value"><span>File</span><strong>{photo?.name ?? (sample ? "sample-wiring.jpg" : "Not selected")}</strong></div>
-          <div className="key-value"><span>Size</span><strong>{photo ? formatBytes(photo.size) : sample ? "1.2 MB" : "—"}</strong></div>
-          <div className="key-value"><span>Type</span><strong>{photo?.type ?? (sample ? "image/jpeg" : "—")}</strong></div>
+          <div className="key-value"><span>File</span><strong>{photo?.name ?? "Not selected"}</strong></div>
+          <div className="key-value"><span>Size</span><strong>{photo ? formatBytes(photo.size) : "—"}</strong></div>
+          <div className="key-value"><span>Type</span><strong>{photo?.type ?? "—"}</strong></div>
           <div className="alert alert-amber">
             <FileImage size={18} />
             <div><strong>Photo tip</strong><p>Use good lighting and keep all terminals and wire colors in focus.</p></div>
@@ -164,38 +177,17 @@ export default function PhotoReviewPage() {
       <div style={{ marginTop: 12 }}>
         <Card className="generator-card">
           <div className="inline-actions" style={{ justifyContent: "flex-start" }}>
-            <Button icon={ScanLine} disabled={loading} onClick={() => analyze()}>
+            <Button icon={ScanLine} disabled={loading || restoringPhoto || !photo} onClick={analyze}>
               {loading ? "Analyzing…" : "Analyze Wiring"}
             </Button>
-            <Button variant="secondary" icon={Sparkles} disabled={loading} onClick={showSample}>Sample Analysis</Button>
-            {(photo || sample) && <Button variant="ghost" icon={Trash2} disabled={loading} onClick={removePhoto}>Remove</Button>}
+            {photo && <Button variant="ghost" icon={Trash2} disabled={loading} onClick={removePhoto}>Remove</Button>}
           </div>
           {error && <div className="auth-message error" style={{ marginTop: 12 }}>{error}</div>}
         </Card>
       </div>
-      <input ref={inputRef} hidden type="file" accept="image/*" onChange={onFileChange} />
+      <input ref={inputRef} hidden type="file" accept={PHOTO_INPUT_ACCEPT} onChange={onFileChange} />
 
-      <SectionTitle title="Previous Analyses" href="#previous-analyses" />
-      <div id="previous-analyses" className="history-grid">
-        {previousAnalyses.map((analysis) => (
-          <Link key={analysis.id} href={`/photo-analysis/results/${analysis.id}`}>
-            <Card className="history-card">
-              <div className="history-thumb" style={{ position: "relative" }}>
-                <Camera size={22} />
-                <span style={{ position: "absolute", top: 9, right: 9 }}><Badge tone="red">{analysis.severity}</Badge></span>
-              </div>
-              <h3>{analysis.title}</h3>
-              <p>{analysis.date}</p>
-              <div className="history-meta">
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--muted)", fontSize: 10 }}>
-                  <Eye size={12} /> View <ChevronRight size={12} />
-                </span>
-                <Badge tone={analysis.confidence === "87%" ? "amber" : "green"}>{analysis.confidence}</Badge>
-              </div>
-            </Card>
-          </Link>
-        ))}
-      </div>
+      <RecentPhotoAnalyses analyses={previousAnalyses} />
     </>
   );
 }

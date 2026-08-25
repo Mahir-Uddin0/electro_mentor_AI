@@ -16,6 +16,11 @@ import {
   isPreviewModeAllowed,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
+import {
+  clearBrowserSession,
+  invalidateBrowserSession,
+  isSessionExpired,
+} from "@/lib/supabase/session";
 
 type AuthContextValue = {
   session: Session | null;
@@ -47,16 +52,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    void supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoading(false);
+    let active = true;
+    void supabase.auth.getSession().then(async ({ data, error }) => {
+      const nextSession = data.session;
+      if (error || (nextSession && isSessionExpired(nextSession))) {
+        await invalidateBrowserSession();
+        if (active) setSession(null);
+      } else if (active) {
+        setSession(nextSession);
+      }
+      if (active) setLoading(false);
     });
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setLoading(false);
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!session?.expires_at) return;
+    const millisecondsUntilExpiry = session.expires_at * 1000 - Date.now();
+    const timer = window.setTimeout(() => {
+      void invalidateBrowserSession();
+    }, Math.max(0, millisecondsUntilExpiry + 250));
+    return () => window.clearTimeout(timer);
+  }, [session]);
 
   const enterPreviewMode = useCallback(() => {
     if (!isPreviewModeAllowed) return;
@@ -67,8 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     window.localStorage.removeItem(PREVIEW_KEY);
     setPreviewMode(false);
-    const supabase = getSupabaseBrowserClient();
-    if (supabase) await supabase.auth.signOut();
+    await clearBrowserSession();
   }, []);
 
   const value = useMemo(

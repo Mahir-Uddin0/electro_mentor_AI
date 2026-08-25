@@ -1,143 +1,298 @@
 "use client";
 
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   BookOpen,
-  Camera,
+  CheckCircle2,
   Clock3,
   Download,
-  Eye,
   HardHat,
+  ImageOff,
+  ImagePlus,
   MapPin,
   RotateCcw,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
-import { Badge, Button, Card, LinkButton, PageHeading, SectionTitle } from "@/components/ui";
+import { useAuth } from "@/components/auth/auth-provider";
+import { RecentPhotoAnalyses } from "@/components/photo-analysis/recent-analyses";
+import {
+  Badge,
+  Button,
+  Card,
+  LinkButton,
+  PageHeading,
+  SectionTitle,
+} from "@/components/ui";
+import type {
+  PhotoAnalysisResult,
+  PhotoFaultSeverity,
+} from "@/lib/api/client";
+import {
+  getStoredPhotoAnalysis,
+  listStoredPhotoAnalyses,
+} from "@/lib/photo-analysis";
 
-const repairSteps = [
-  "Turn OFF the main power supply at the distribution board.",
-  "Verify power is off using a voltage tester.",
-  "Wear insulated gloves and safety shoes.",
-  "Retighten the terminal screw firmly using a properly sized screwdriver.",
-  "Inspect the wire for any signs of heat damage or discoloration.",
-  "If the wire is damaged, cut back and re-strip before reconnecting.",
-  "Perform a continuity test to verify the connection.",
-  "Restore power and test the circuit.",
-];
+function severityTone(
+  severity: PhotoFaultSeverity,
+): "red" | "amber" | "blue" {
+  if (severity === "critical" || severity === "high") return "red";
+  if (severity === "medium") return "amber";
+  return "blue";
+}
 
-const previousAnalyses = [
-  { id: "AN-1039", title: "Exposed Live Wire", date: "2025-01-10", severity: "Critical", confidence: "99%" },
-  { id: "AN-1040", title: "Overloaded Circuit", date: "2025-01-08", severity: "High", confidence: "91%" },
-  { id: "AN-1041", title: "Missing Ground Connection", date: "2025-01-05", severity: "High", confidence: "87%" },
-  { id: "AN-1038", title: "Loose Neutral Wire", date: "2025-01-02", severity: "High", confidence: "96%" },
-];
+function severityLabel(severity: PhotoFaultSeverity) {
+  return `${severity.slice(0, 1).toUpperCase()}${severity.slice(1)}`;
+}
 
-export default function PhotoAnalysisResultPage() {
-  const params = useParams<{ id: string }>();
+function GuidanceCard({ analysis }: { analysis: PhotoAnalysisResult }) {
+  const { upload_guidance: guidance } = analysis;
+  if (
+    !guidance.reason &&
+    guidance.recommended_photos.length === 0 &&
+    guidance.photo_tips.length === 0
+  ) {
+    return null;
+  }
 
   return (
-    <>
-      <PageHeading title="AI Fault Detection" eyebrow={`Analysis ${params.id}`} />
+    <Card className="detail-section">
+      <h2><ImagePlus size={17} /> Photo guidance</h2>
+      {guidance.reason && <p style={{ color: "var(--muted)" }}>{guidance.reason}</p>}
+      {guidance.recommended_photos.length > 0 && (
+        <>
+          <strong style={{ display: "block", margin: "14px 0 7px", fontSize: 12 }}>
+            Upload these views
+          </strong>
+          <ul className="two-column-list">
+            {guidance.recommended_photos.map((photo) => <li key={photo}>{photo}</li>)}
+          </ul>
+        </>
+      )}
+      {guidance.photo_tips.length > 0 && (
+        <>
+          <strong style={{ display: "block", margin: "14px 0 7px", fontSize: 12 }}>
+            Photo tips
+          </strong>
+          <ul className="two-column-list">
+            {guidance.photo_tips.map((tip) => <li key={tip}>{tip}</li>)}
+          </ul>
+        </>
+      )}
+    </Card>
+  );
+}
 
-      <div className="alert alert-red" style={{ marginBottom: 14 }}>
+function FaultResult({ analysis }: { analysis: PhotoAnalysisResult }) {
+  const fault = analysis.primary_fault;
+  if (!fault) {
+    return (
+      <>
+        <div className="alert alert-amber" style={{ marginBottom: 14 }}>
+          <AlertTriangle size={20} />
+          <div><strong>Analysis completed</strong><p>{analysis.summary}</p></div>
+        </div>
+        <GuidanceCard analysis={analysis} />
+      </>
+    );
+  }
+
+  const urgent = fault.severity === "critical" || fault.severity === "high";
+  return (
+    <>
+      <div className={`alert ${urgent ? "alert-red" : "alert-amber"}`} style={{ marginBottom: 14 }}>
         <AlertTriangle size={20} />
         <div>
-          <strong>High Severity Fault Detected</strong>
-          <p>Immediate attention required. Do not attempt repair without proper safety measures.</p>
+          <strong>{severityLabel(fault.severity)} Severity Fault Detected</strong>
+          <p>{analysis.summary}</p>
         </div>
       </div>
 
       <Card className="result-hero">
         <div className="result-title">
-          <div><h1>Loose Neutral Wire</h1><p>Detected at the terminal block connection.</p></div>
-          <div className="chips"><Badge tone="green">96% Confidence</Badge><Badge tone="red">High Severity</Badge></div>
+          <div><h1>{fault.title}</h1><p>{fault.description}</p></div>
+          <div className="chips">
+            <Badge tone="green">{Math.round(fault.confidence)}% Confidence</Badge>
+            <Badge tone={severityTone(fault.severity)}>{severityLabel(fault.severity)} Severity</Badge>
+          </div>
         </div>
 
         <div className="result-info-grid">
           <div className="result-info">
             <span><MapPin size={12} /> Location</span>
-            <strong>Terminal Block</strong>
+            <strong>{fault.location || "Location not clear from the photo"}</strong>
           </div>
           <div className="result-info">
             <span><AlertTriangle size={12} /> Possible cause</span>
-            <strong>Vibration, thermal cycling, or improper initial installation may have loosened the terminal screw.</strong>
+            <strong>{fault.possible_cause}</strong>
           </div>
         </div>
 
-        <div className="alert alert-green">
-          <Wrench size={19} />
-          <div style={{ width: "100%" }}>
-            <strong>Repair Recommendation</strong>
-            <ol className="step-list">
-              {repairSteps.map((step, index) => <li key={step}><i>{index + 1}</i><span>{step}</span></li>)}
-            </ol>
+        {fault.repair_steps.length > 0 && (
+          <div className="alert alert-green">
+            <Wrench size={19} />
+            <div style={{ width: "100%" }}>
+              <strong>Repair Recommendation</strong>
+              <ol className="step-list">
+                {fault.repair_steps.map((step, index) => (
+                  <li key={`${index}-${step}`}><i>{index + 1}</i><span>{step}</span></li>
+                ))}
+              </ol>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="alert alert-red">
-          <AlertTriangle size={19} />
-          <div><strong>Safety Warning</strong><p>Loose neutral connections are extremely dangerous. Always de-energize before working.</p></div>
-        </div>
+        {fault.safety_warning && (
+          <div className="alert alert-red">
+            <AlertTriangle size={19} />
+            <div><strong>Safety Warning</strong><p>{fault.safety_warning}</p></div>
+          </div>
+        )}
 
         <div className="result-info-grid">
           <div className="result-info">
             <span><ShieldCheck size={12} /> Required PPE</span>
             <div className="chips" style={{ marginTop: 8 }}>
-              <Badge tone="blue">Insulated Gloves (Class 00)</Badge><Badge tone="blue">Safety Shoes</Badge><Badge tone="blue">Safety Goggles</Badge>
+              {fault.required_ppe.length > 0
+                ? fault.required_ppe.map((item) => <Badge key={item} tone="blue">{item}</Badge>)
+                : <span style={{ color: "var(--muted)", fontSize: 11 }}>Consult a qualified electrician.</span>}
             </div>
           </div>
           <div className="result-info">
             <span><HardHat size={12} /> Required tools</span>
             <div className="chips" style={{ marginTop: 8 }}>
-              <Badge tone="amber">Screwdriver Set</Badge><Badge tone="amber">Voltage Tester</Badge><Badge tone="amber">Wire Stripper</Badge><Badge tone="amber">Multimeter</Badge>
+              {fault.required_tools.length > 0
+                ? fault.required_tools.map((item) => <Badge key={item} tone="amber">{item}</Badge>)
+                : <span style={{ color: "var(--muted)", fontSize: 11 }}>No tools identified from the image.</span>}
             </div>
           </div>
         </div>
-        <div className="result-info">
-          <span><Clock3 size={12} /> Estimated repair time</span>
-          <strong>15–20 minutes</strong>
-        </div>
+        {fault.estimated_repair_time && (
+          <div className="result-info">
+            <span><Clock3 size={12} /> Estimated repair time</span>
+            <strong>{fault.estimated_repair_time}</strong>
+          </div>
+        )}
       </Card>
 
-      <SectionTitle title="Other Faults Detected" />
-      <div className="result-info-grid">
-        <Card className="detail-section">
-          <div className="result-title"><div><h2>Poor Insulation</h2></div><Badge tone="amber">Medium</Badge></div>
-          <p style={{ color: "var(--muted)", fontSize: 11 }}>Cable insulation appears worn at the entry point of the junction box, potentially exposing the conductor.</p>
-          <div className="alert alert-green" style={{ marginTop: 12 }}><Wrench size={15} /><p>Replace the cable section or apply appropriate insulation tape.</p></div>
-        </Card>
-        <Card className="detail-section">
-          <div className="result-title"><div><h2>Improper Cable Routing</h2></div><Badge tone="blue">Low</Badge></div>
-          <p style={{ color: "var(--muted)", fontSize: 11 }}>Cables are not properly secured in the cable tray and are hanging loosely.</p>
-          <div className="alert alert-green" style={{ marginTop: 12 }}><Wrench size={15} /><p>Use cable ties to secure all cables properly in the tray.</p></div>
-        </Card>
+      {analysis.other_faults.length > 0 && (
+        <>
+          <SectionTitle title="Other Faults Detected" />
+          <div className="result-info-grid">
+            {analysis.other_faults.map((otherFault, index) => (
+              <Card className="detail-section" key={`${index}-${otherFault.title}`}>
+                <div className="result-title">
+                  <div><h2>{otherFault.title}</h2></div>
+                  <div className="chips">
+                    <Badge tone="green">{Math.round(otherFault.confidence)}%</Badge>
+                    <Badge tone={severityTone(otherFault.severity)}>
+                      {severityLabel(otherFault.severity)}
+                    </Badge>
+                  </div>
+                </div>
+                <p style={{ color: "var(--muted)", fontSize: 11 }}>{otherFault.description}</p>
+                {otherFault.location && (
+                  <p style={{ color: "var(--muted)", fontSize: 11 }}>
+                    <MapPin size={12} style={{ verticalAlign: "middle", marginRight: 5 }} />
+                    {otherFault.location}
+                  </p>
+                )}
+                <div className="alert alert-green" style={{ marginTop: 12 }}>
+                  <Wrench size={15} /><p>{otherFault.recommendation}</p>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+      <div style={{ marginTop: 14 }}><GuidanceCard analysis={analysis} /></div>
+    </>
+  );
+}
+
+function ClearResult({ analysis }: { analysis: PhotoAnalysisResult }) {
+  const insufficient = analysis.outcome === "insufficient_image";
+  return (
+    <>
+      <div className={`alert ${insufficient ? "alert-amber" : "alert-green"}`} style={{ marginBottom: 14 }}>
+        {insufficient ? <ImageOff size={20} /> : <CheckCircle2 size={20} />}
+        <div>
+          <strong>{insufficient ? "The image could not be assessed reliably" : "No visible faults detected"}</strong>
+          <p>{analysis.summary}</p>
+        </div>
       </div>
+      <Card className="result-hero">
+        <div className="result-title">
+          <div>
+            <h1>{insufficient ? "A clearer photo is needed" : "Visual check complete"}</h1>
+            <p>
+              {insufficient
+                ? analysis.upload_guidance.reason ?? "Important wiring details were not visible enough for a reliable assessment."
+                : "No fault was visible in this image. This visual result does not replace electrical testing by a qualified person."}
+            </p>
+          </div>
+          <Badge tone={insufficient ? "amber" : "green"}>
+            {insufficient ? "Not analyzable" : "No visible fault"}
+          </Badge>
+        </div>
+      </Card>
+      <div style={{ marginTop: 14 }}><GuidanceCard analysis={analysis} /></div>
+    </>
+  );
+}
+
+export default function PhotoAnalysisResultPage() {
+  const params = useParams<{ id: string }>();
+  const { user } = useAuth();
+  const ownerId = user?.id ?? "preview";
+  const [analysis, setAnalysis] = useState<PhotoAnalysisResult | null | undefined>();
+  const [recentAnalyses, setRecentAnalyses] = useState<PhotoAnalysisResult[]>([]);
+
+  useEffect(() => {
+    setAnalysis(getStoredPhotoAnalysis(ownerId, params.id));
+    setRecentAnalyses(listStoredPhotoAnalyses(ownerId));
+  }, [ownerId, params.id]);
+
+  if (analysis === undefined) {
+    return <div className="full-loader" style={{ minHeight: 360, background: "transparent" }}><span className="spinner" /> Loading analysis…</div>;
+  }
+
+  if (!analysis) {
+    return (
+      <>
+        <PageHeading title="AI Fault Detection" eyebrow={`Analysis ${params.id}`} />
+        <Card className="empty-state">
+          <span className="empty-icon"><ImageOff size={28} /></span>
+          <h2>Analysis report unavailable</h2>
+          <p>
+            Photo reports are retained only for the current signed-in user and browser session. Upload the photo again to run a new analysis.
+          </p>
+          <LinkButton href="/photo-analysis" icon={RotateCcw}>Start New Analysis</LinkButton>
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHeading title="AI Fault Detection" eyebrow={`Analysis ${analysis.analysis_id}`} />
+
+      {analysis.outcome === "faults_detected"
+        ? <FaultResult analysis={analysis} />
+        : <ClearResult analysis={analysis} />}
 
       <div className="inline-actions" style={{ justifyContent: "flex-start", marginTop: 14 }}>
         <Button icon={Download} onClick={() => window.print()}>Save Report</Button>
-        <LinkButton href="/guides" variant="secondary" icon={BookOpen}>Related Guide</LinkButton>
+        {analysis.outcome === "faults_detected" && (
+          <LinkButton href="/guides" variant="secondary" icon={BookOpen}>Related Guide</LinkButton>
+        )}
         <LinkButton href="/photo-analysis" variant="secondary" icon={RotateCcw}>New Analysis</LinkButton>
       </div>
 
-      <SectionTitle title="Previous Analyses" href="#previous-analyses" />
-      <div id="previous-analyses" className="history-grid">
-        {previousAnalyses.map((analysis) => (
-          <Link key={analysis.id} href={`/photo-analysis/results/${analysis.id}`}>
-            <Card className="history-card">
-              <div className="history-thumb" style={{ position: "relative" }}>
-                <Camera size={22} />
-                <span style={{ position: "absolute", top: 9, right: 9 }}><Badge tone="red">{analysis.severity}</Badge></span>
-              </div>
-              <h3>{analysis.title}</h3><p>{analysis.date}</p>
-              <div className="history-meta"><span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--muted)", fontSize: 10 }}><Eye size={12} /> View</span><Badge tone="green">{analysis.confidence}</Badge></div>
-            </Card>
-          </Link>
-        ))}
-      </div>
+      <RecentPhotoAnalyses analyses={recentAnalyses} />
     </>
   );
 }

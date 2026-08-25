@@ -1,5 +1,5 @@
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,9 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=10_000)
-    conversation_id: UUID = Field(default_factory=uuid4)
+    conversation_id: UUID | None = None
+    # Backward-compatible request field. Authenticated endpoints ignore values
+    # supplied here and load prompt context from the user's database rows.
     history: list[Message] = Field(default_factory=list, max_length=30)
 
 
