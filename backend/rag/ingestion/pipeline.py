@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -217,6 +218,13 @@ def build_pipeline(settings: Settings) -> RetrievalIngestionPipeline:
         model=settings.gemini_embedding_model,
         dimensions=settings.gemini_embedding_dimensions,
         batch_size=settings.gemini_embedding_batch_size,
+        max_retries=settings.gemini_embedding_max_retries,
+        requests_per_minute=settings.gemini_embedding_requests_per_minute,
+        tokens_per_minute=settings.gemini_embedding_tokens_per_minute,
+        retry_base_delay_seconds=(
+            settings.gemini_embedding_retry_base_seconds
+        ),
+        retry_max_delay_seconds=settings.gemini_embedding_retry_max_seconds,
     )
     chunker = SemanticMarkdownChunker(
         embedder,
@@ -250,6 +258,7 @@ def build_pipeline(settings: Settings) -> RetrievalIngestionPipeline:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--force",

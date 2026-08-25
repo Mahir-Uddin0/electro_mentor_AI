@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import math
 import re
 from dataclasses import asdict, dataclass
@@ -317,19 +318,36 @@ def chunk_directory(
 
 
 def main() -> None:
-    from dotenv import load_dotenv
+    from app.core.config import get_settings
 
     repo_root = Path(__file__).resolve().parents[2]
-    load_dotenv(repo_root / ".env")
+    settings = get_settings()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=repo_root / "data/markdown")
     parser.add_argument("--output", type=Path, default=repo_root / "data/chunks")
-    parser.add_argument("--model", default="gemini-embedding-001")
-    parser.add_argument("--dimensions", type=int, default=768)
+    parser.add_argument("--model", default=settings.gemini_embedding_model)
+    parser.add_argument(
+        "--dimensions",
+        type=int,
+        default=settings.gemini_embedding_dimensions,
+    )
     parser.add_argument("--breakpoint-percentile", type=float, default=80.0)
     args = parser.parse_args()
 
-    embedder = GeminiEmbedder(model=args.model, dimensions=args.dimensions)
+    embedder = GeminiEmbedder(
+        api_key=settings.gemini_api_key,
+        model=args.model,
+        dimensions=args.dimensions,
+        batch_size=settings.gemini_embedding_batch_size,
+        max_retries=settings.gemini_embedding_max_retries,
+        requests_per_minute=settings.gemini_embedding_requests_per_minute,
+        tokens_per_minute=settings.gemini_embedding_tokens_per_minute,
+        retry_base_delay_seconds=(
+            settings.gemini_embedding_retry_base_seconds
+        ),
+        retry_max_delay_seconds=settings.gemini_embedding_retry_max_seconds,
+    )
     chunker = SemanticMarkdownChunker(
         embedder, breakpoint_percentile=args.breakpoint_percentile
     )

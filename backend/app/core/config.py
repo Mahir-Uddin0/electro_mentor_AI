@@ -53,13 +53,34 @@ class Settings(BaseSettings):
     )
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=768, le=768)
-    gemini_embedding_batch_size: int = Field(default=50, ge=1, le=100)
+    gemini_embedding_batch_size: int = Field(default=5, ge=1, le=100)
+    # Conservative ingestion limits. Confirm the project's active Gemini
+    # limits in AI Studio before increasing either value.
+    gemini_embedding_requests_per_minute: int = Field(default=5, ge=1, le=1_000)
+    gemini_embedding_tokens_per_minute: int = Field(
+        default=10_000,
+        ge=1_000,
+        le=100_000_000,
+    )
+    gemini_embedding_max_retries: int = Field(default=8, ge=1, le=20)
+    gemini_embedding_retry_base_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=300,
+    )
+    gemini_embedding_retry_max_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        le=900,
+    )
 
     chroma_persist_directory: Path = Path("data/chroma")
     chroma_collection_name: str = "electromentor_documents"
     raw_pdf_directory: Path = Path("data/raw_pdfs")
     markdown_directory: Path = Path("data/markdown")
     chunks_directory: Path = Path("data/chunks")
+    safety_checklist_directory: Path = Path("data/safety_checklist")
+    guide_library_directory: Path = Path("data/wiring_circuit_guide_library")
 
     semantic_breakpoint_percentile: float = Field(default=80.0, ge=0, le=100)
     semantic_candidate_chars: int = Field(default=350, gt=0)
