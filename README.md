@@ -66,27 +66,33 @@ create additional daily quota. Keep these settings below the active limits
 shown for your project in Google AI Studio; if the daily allowance is already
 exhausted, resume ingestion after the provider resets it.
 
-### Supabase authentication, chat history, and tasks
+### Supabase authentication and user-owned data
 
 Run `backend/supabase/chat_messages.sql` in the Supabase SQL editor. It creates
 the named-conversation and ordered-message tables, upgrades any rows from the
 old flat history schema, and installs ownership constraints, indexes, grants,
-triggers, and Row Level Security policies. Run `backend/supabase/tasks.sql` as
-well to create the user-owned task tracker table and its workflow trigger,
-grants, indexes, and RLS policies. Then configure `backend/.env`:
+triggers, and Row Level Security policies. Also run
+`backend/supabase/tasks.sql` for the task tracker and
+`backend/supabase/practical_assessment.sql` for each user's one-time practical
+assessment and competency profile. Then configure `backend/.env`:
 
 ```env
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_API_KEY=your-publishable-or-anon-key
+# Server-only secret key used for trusted assessment writes. Never expose it
+# through a NEXT_PUBLIC_* variable.
+SUPABASE_SECRET_KEY=your-sb_secret-key-or-legacy-service-role-jwt
 # Optional: required only if the project still issues legacy HS256 tokens.
 SUPABASE_JWT_SECRET=your-legacy-hs256-jwt-secret
 SUPABASE_CONVERSATIONS_TABLE=conversations
 SUPABASE_CHAT_MESSAGES_TABLE=chat_messages
 SUPABASE_TASKS_TABLE=tasks
+SUPABASE_PRACTICAL_ASSESSMENTS_TABLE=practical_assessments
 CHAT_HISTORY_MESSAGE_LIMIT=7
 ```
 
-Keep `SUPABASE_JWT_SECRET` on the backend only. Current ES256/RS256 tokens are
+Keep `SUPABASE_JWT_SECRET` and `SUPABASE_SECRET_KEY` on the backend only.
+Current ES256/RS256 tokens are
 verified locally with Supabase's cached public JWKS and do not need that secret.
 `SUPABASE_API_KEY` should be the project's publishable or legacy anon key; the
 backend forwards the verified user access token to the Data API so the user's
@@ -108,6 +114,15 @@ stored history for the frontend.
 The authenticated `/api/v1/tasks` endpoints list, create, update, and delete
 only the current user's tasks. Task status advances from `upcoming` to
 `in_progress` to `completed`; active tasks are ordered by priority and due date.
+
+The authenticated `/api/v1/practical-assessments` workflow accepts an optional
+MP4/MOV/WebM video, returns the fixed ten-question assessment, saves editable
+answers, and asks Gemini for the final six competency scores, improvement plan,
+and fixed eighteen-item checklist. Raw video bytes are not stored in Supabase.
+Once completed, the row is immutable and its compact competency summary is
+included as untrusted personalization context in later RAG chats without
+weakening electrical-safety instructions. See
+`backend/supabase/README.md` for the endpoint and migration details.
 
 ### Ingest all PDFs
 

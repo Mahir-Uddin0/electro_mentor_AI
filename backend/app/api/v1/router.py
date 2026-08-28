@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     guides,
     health,
     photo_analysis,
+    practical_assessments,
     safety_checklists,
     tasks,
 )
@@ -21,6 +22,11 @@ api_router.include_router(
     photo_analysis.router,
     prefix="/photo-analysis",
     tags=["photo analysis"],
+)
+api_router.include_router(
+    practical_assessments.router,
+    prefix="/practical-assessments",
+    tags=["practical assessments"],
 )
 api_router.include_router(
     safety_checklists.router,

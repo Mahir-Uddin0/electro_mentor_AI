@@ -27,13 +27,14 @@ NEXT_PUBLIC_USE_MOCK_PHOTO_API=false
 NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=false
 NEXT_PUBLIC_USE_MOCK_GUIDE_API=false
 NEXT_PUBLIC_USE_MOCK_TASK_API=false
+NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false
 ```
 
 Only the Supabase URL and publishable/anon key belong in the browser. Never place the Supabase JWT secret or service-role key in a `NEXT_PUBLIC_` variable.
 
 In Supabase **Authentication → URL Configuration**, set the local site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` as an allowed redirect URL. Add the equivalent HTTPS callback before deploying.
 
-`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, and the task tracker have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
+`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, the task tracker, and practical assessment have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
 
 The API client asks Supabase for a current session before every real backend
 request. Supabase refreshes an expired access token when possible; a failed
@@ -64,6 +65,15 @@ The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
 - `PATCH /tasks/{task_id}` and `DELETE /tasks/{task_id}`
 
 Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in Supabase through FastAPI.
+
+The one-time Video Practical Assessment uses authenticated FastAPI routes under `/api/v1`:
+
+- `GET /practical-assessments/me` loads the current user's draft or completed profile and the fixed questionnaire/checklist definitions.
+- `POST /practical-assessments` starts the assessment with required topic/project fields and an optional MP4, MOV, or WebM video up to 100 MB.
+- `PUT /practical-assessments/{assessment_id}/answers` saves all ten editable answers.
+- `POST /practical-assessments/{assessment_id}/evaluate` runs the single Gemini evaluation and stores its results.
+
+The six assessment screens share one provider, so a draft can move between the question and answer steps without static placeholder data. Completed scores, improvement suggestions, and the competency checklist are always rendered from the same saved evaluation. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to use this backend flow.
 
 The remaining temporary frontend contract expects `GET /dashboard` and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
 

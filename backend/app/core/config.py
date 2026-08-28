@@ -25,6 +25,8 @@ class Settings(BaseSettings):
 
     supabase_url: str | None = None
     supabase_api_key: str | None = None
+    # Server-only Supabase secret. Never expose it to browser code.
+    supabase_secret_key: str | None = None
     supabase_jwt_secret: str | None = None
     supabase_conversations_table: str = Field(
         default="conversations",
@@ -36,6 +38,10 @@ class Settings(BaseSettings):
     )
     supabase_tasks_table: str = Field(
         default="tasks",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+    supabase_practical_assessments_table: str = Field(
+        default="practical_assessments",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
@@ -54,6 +60,22 @@ class Settings(BaseSettings):
         default=14_000_000,
         ge=1,
         le=14_000_000,
+    )
+    gemini_assessment_model: str = "gemini-3.7-flash"
+    gemini_assessment_max_output_tokens: int = Field(
+        default=8_192,
+        ge=1,
+        le=65_536,
+    )
+    gemini_file_processing_timeout_seconds: float = Field(
+        default=180,
+        gt=0,
+        le=1_800,
+    )
+    practical_assessment_max_video_bytes: int = Field(
+        default=100_000_000,
+        ge=1,
+        le=2_000_000_000,
     )
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=768, le=768)

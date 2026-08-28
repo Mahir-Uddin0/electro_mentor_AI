@@ -13,6 +13,8 @@ const useMockChecklistApi =
   process.env.NEXT_PUBLIC_USE_MOCK_CHECKLIST_API === "true";
 const useMockGuideApi = process.env.NEXT_PUBLIC_USE_MOCK_GUIDE_API === "true";
 const useMockTaskApi = process.env.NEXT_PUBLIC_USE_MOCK_TASK_API === "true";
+const useMockAssessmentApi =
+  process.env.NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API === "true";
 
 export class ApiError extends Error {
   constructor(
@@ -148,6 +150,155 @@ export type UpdateTaskInput = Partial<
   Pick<Task, "title" | "description" | "status" | "priority" | "due_date">
 >;
 
+export type PracticalAssessmentStatus = "draft" | "completed";
+export type PracticalAssessmentVideoStatus =
+  | "not_provided"
+  | "analyzed"
+  | "failed";
+export type PracticalAssessmentAnswerSource =
+  | "empty"
+  | "ai"
+  | "user"
+  | "ai_edited";
+export type PracticalAssessmentPriority = "high" | "medium" | "low";
+export type PracticalAssessmentChecklistStatus =
+  | "mastered"
+  | "needs_improvement"
+  | "not_observed";
+export type PracticalAssessmentCriterionStatus =
+  | "met"
+  | "not_met"
+  | "not_observed";
+
+export type PracticalAssessmentQuestion = {
+  id: string;
+  prompt: string;
+  points: number;
+  competency: string;
+};
+
+export type PracticalAssessmentAnswer = {
+  question_id: string;
+  answer: string | null;
+  ai_answer: string | null;
+  answer_source: PracticalAssessmentAnswerSource;
+  ai_confidence: number | null;
+  ai_evidence: string | null;
+};
+
+export type PracticalAssessmentQuestionFeedback = {
+  question_id: string;
+  score: number;
+  feedback: string;
+  evidence_basis: "video" | "answer" | "both" | "insufficient";
+};
+
+export type PracticalAssessmentSkillScore = {
+  competency: string;
+  label: string;
+  score: number;
+  rationale: string;
+  confidence: number;
+};
+
+export type PracticalAssessmentSuggestion = {
+  priority: PracticalAssessmentPriority;
+  competency: string;
+  title: string;
+  description: string;
+  action_steps: string[];
+};
+
+export type PracticalAssessmentChecklistItemDefinition = {
+  id: string;
+  label: string;
+};
+
+export type PracticalAssessmentChecklistDefinition = {
+  competency: string;
+  label: string;
+  criteria: PracticalAssessmentChecklistItemDefinition[];
+};
+
+export type PracticalAssessmentChecklistItem = {
+  criterion_id: string;
+  label: string;
+  status: PracticalAssessmentCriterionStatus;
+  rationale: string;
+};
+
+export type PracticalAssessmentChecklistSection = {
+  competency: string;
+  label: string;
+  score: number;
+  status: PracticalAssessmentChecklistStatus;
+  criteria: PracticalAssessmentChecklistItem[];
+};
+
+export type PracticalAssessmentEvaluation = {
+  summary: string;
+  question_feedback: PracticalAssessmentQuestionFeedback[];
+  skill_scores: PracticalAssessmentSkillScore[];
+  suggestions: PracticalAssessmentSuggestion[];
+  checklist_sections: PracticalAssessmentChecklistSection[];
+};
+
+export type PracticalAssessment = {
+  id: string;
+  user_id: string;
+  questionnaire_version: string;
+  status: PracticalAssessmentStatus;
+  topic: string;
+  project_name: string;
+  video_status: PracticalAssessmentVideoStatus;
+  video_file_name: string | null;
+  video_mime_type: string | null;
+  video_size_bytes: number | null;
+  video_sha256: string | null;
+  video_analysis: {
+    answers: Array<{
+      question_id: string;
+      answer: string | null;
+      confidence: number;
+      evidence: string | null;
+    }>;
+    analyzed_at: string;
+  } | null;
+  answers: PracticalAssessmentAnswer[];
+  safety_procedures_score: number | null;
+  tool_usage_score: number | null;
+  technical_knowledge_score: number | null;
+  work_quality_score: number | null;
+  testing_verification_score: number | null;
+  documentation_score: number | null;
+  overall_score: number | null;
+  grade: "A" | "B" | "C" | "D" | "F" | null;
+  passed: boolean | null;
+  evaluation: PracticalAssessmentEvaluation | null;
+  personalization_context: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type PracticalAssessmentResponse = {
+  assessment: PracticalAssessment | null;
+  questions: PracticalAssessmentQuestion[];
+  checklist_definitions: PracticalAssessmentChecklistDefinition[];
+};
+
+export type StartPracticalAssessmentInput = {
+  topic: string;
+  projectName: string;
+  video?: File | null;
+};
+
+export type SavePracticalAssessmentAnswersInput = {
+  question_id: string;
+  answer: string | null;
+};
+
 async function apiFetch(
   path: string,
   init: RequestInit,
@@ -212,6 +363,42 @@ export async function apiBlobRequest(
 
 export const frontendApi = {
   dashboard: () => apiRequest<{ greeting: string }>("dashboard"),
+  getMyPracticalAssessment: () =>
+    apiRequest<PracticalAssessmentResponse>(
+      "practical-assessments/me",
+      {},
+      { useMock: useMockAssessmentApi },
+    ),
+  startPracticalAssessment: ({
+    topic,
+    projectName,
+    video,
+  }: StartPracticalAssessmentInput) => {
+    const body = new FormData();
+    body.append("topic", topic);
+    body.append("project_name", projectName);
+    if (video) body.append("video", video, video.name);
+    return apiRequest<PracticalAssessmentResponse>(
+      "practical-assessments",
+      { method: "POST", body },
+      { useMock: useMockAssessmentApi },
+    );
+  },
+  savePracticalAssessmentAnswers: (
+    assessmentId: string,
+    answers: SavePracticalAssessmentAnswersInput[],
+  ) =>
+    apiRequest<PracticalAssessmentResponse>(
+      `practical-assessments/${encodeURIComponent(assessmentId)}/answers`,
+      { method: "PUT", body: JSON.stringify({ answers }) },
+      { useMock: useMockAssessmentApi },
+    ),
+  evaluatePracticalAssessment: (assessmentId: string) =>
+    apiRequest<PracticalAssessmentResponse>(
+      `practical-assessments/${encodeURIComponent(assessmentId)}/evaluate`,
+      { method: "POST" },
+      { useMock: useMockAssessmentApi },
+    ),
   listTasks: () =>
     apiRequest<{ tasks: Task[] }>("tasks", {}, { useMock: useMockTaskApi }),
   createTask: (task: CreateTaskInput) =>

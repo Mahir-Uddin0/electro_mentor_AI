@@ -1,94 +1,146 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, BarChart3, BookOpen, CheckSquare2, Wrench } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
+  BookOpen,
+  CheckSquare2,
+  ShieldCheck,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect } from "react";
 
+import {
+  AssessmentLoadError,
+  AssessmentLoading,
+  AssessmentMissing,
+} from "@/components/assessment/assessment-page-state";
+import { usePracticalAssessment } from "@/components/assessment/assessment-provider";
 import { AssessmentStepper } from "@/components/assessment/assessment-stepper";
-import { Badge, Button, Card, LinkButton, PageHeading } from "@/components/ui";
+import { Badge, Card, LinkButton, PageHeading } from "@/components/ui";
+import type { PracticalAssessmentPriority } from "@/lib/api/client";
 
-const nextSteps = [
-  "Review the related guide in the Guide Library",
-  "Practise the specific weak areas identified",
-  "Discuss difficult concepts with your instructor",
-  "Record another assessment video after practice",
-];
+function priorityTone(priority: PracticalAssessmentPriority) {
+  if (priority === "high") return "red" as const;
+  if (priority === "medium") return "amber" as const;
+  return "green" as const;
+}
+
+function suggestionIcon(competency: string): LucideIcon {
+  if (competency === "safety_procedures") return ShieldCheck;
+  if (competency === "tool_usage" || competency === "work_quality") return Wrench;
+  if (competency === "technical_knowledge" || competency === "documentation") return BookOpen;
+  return BarChart3;
+}
 
 export default function AssessmentSuggestionsPage() {
   const router = useRouter();
-  const [completed, setCompleted] = useState<boolean[]>(nextSteps.map(() => false));
+  const { assessment, loading, error, refresh } = usePracticalAssessment();
+
+  useEffect(() => {
+    if (!loading && assessment?.status === "draft") {
+      router.replace("/assessments/new/answers");
+    }
+  }, [assessment, loading, router]);
+
+  if (loading || assessment?.status === "draft") {
+    return <AssessmentLoading label="Loading your suggestions…" />;
+  }
+  if (error) {
+    return (
+      <AssessmentLoadError
+        message={error}
+        retry={() => void refresh().catch(() => {})}
+      />
+    );
+  }
+  if (!assessment) return <AssessmentMissing />;
+  if (!assessment.evaluation) {
+    return (
+      <AssessmentLoadError
+        message="Your completed assessment has no saved suggestions."
+        retry={() => void refresh().catch(() => {})}
+      />
+    );
+  }
+  const competencyLabels = new Map(
+    assessment.evaluation.skill_scores.map((skill) => [skill.competency, skill.label]),
+  );
 
   return (
     <div>
-      <AssessmentStepper currentStep={5} />
+      <AssessmentStepper currentStep={5} assessmentStatus={assessment.status} />
       <PageHeading
         title="Improvement Suggestions"
-        description="Step 5 of 6 — Personalized recommendations"
+        description="Step 5 of 6 — Prioritized guidance generated from your saved assessment."
       />
 
-      <div style={{ display: "grid", gap: 14 }}>
-        <Card className="suggestion-card">
-          <span className="icon-box icon-blue"><BarChart3 size={18} /></span>
-          <div>
-            <Badge tone="green">LOW PRIORITY</Badge>
-            <h3 style={{ marginTop: 9 }}>Good Performance</h3>
-            <p>
-              You scored 100% on Three Phase. Strong understanding overall. Focus on the few areas that need attention.
-            </p>
-          </div>
-        </Card>
+      <Card className="assessment-suggestion-summary">
+        <span className="icon-box icon-blue"><BarChart3 size={19} /></span>
+        <div>
+          <strong>Personalized for {assessment.project_name}</strong>
+          <p>
+            These actions are based on your final answers{assessment.video_status === "analyzed" ? " and observable video evidence" : ""}.
+          </p>
+        </div>
+        <Badge>{assessment.topic}</Badge>
+      </Card>
 
-        <Card className="suggestion-card">
-          <span className="icon-box icon-amber"><Wrench size={18} /></span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <Badge tone="amber">MEDIUM PRIORITY</Badge>
-            <h3 style={{ marginTop: 9 }}>Recommended Practice</h3>
-            <p>
-              Practise the Three Phase task at least 2 more times, focusing on the areas where mistakes were made. Record a new video after each practice session.
-            </p>
-            <strong style={{ display: "block", marginTop: 13, color: "var(--muted)", fontSize: 9, letterSpacing: ".06em" }}>
-              NEXT STEPS:
-            </strong>
-            <div style={{ display: "grid", gap: 7, marginTop: 7 }}>
-              {nextSteps.map((step, index) => (
-                <label
-                  key={step}
-                  style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--muted)", fontSize: 11, cursor: "pointer" }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={completed[index]}
-                    onChange={() => setCompleted((items) => items.map((item, itemIndex) => itemIndex === index ? !item : item))}
-                    style={{ accentColor: "var(--green)" }}
-                  />
-                  <span style={{ textDecoration: completed[index] ? "line-through" : "none" }}>{step}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        </Card>
-
-        <Card className="suggestion-card">
-          <span className="icon-box icon-green"><BookOpen size={18} /></span>
-          <div>
-            <Badge tone="amber">MEDIUM PRIORITY</Badge>
-            <h3 style={{ marginTop: 9 }}>Study Recommended Guide</h3>
-            <p>Review “Three Phase Guide” in the Guide Library for detailed step-by-step instructions.</p>
-            <Button
-              variant="secondary"
-              icon={CheckSquare2}
-              onClick={() => router.push("/guides/lighting-circuit-design")}
-              style={{ marginTop: 11 }}
+      <div className="assessment-suggestion-list">
+        {assessment.evaluation.suggestions.map((suggestion, index) => {
+          const Icon = suggestionIcon(suggestion.competency);
+          const tone = priorityTone(suggestion.priority);
+          return (
+            <Card
+              className={`suggestion-card assessment-suggestion priority-${suggestion.priority}`}
+              key={`${suggestion.competency}-${suggestion.title}-${index}`}
             >
-              Open Guide
-            </Button>
-          </div>
-        </Card>
+              <span className={`icon-box icon-${tone === "red" ? "amber" : tone}`}>
+                <Icon size={18} />
+              </span>
+              <div>
+                <div className="chips">
+                  <Badge tone={tone}>{suggestion.priority.toUpperCase()} PRIORITY</Badge>
+                  <Badge tone="gray">
+                    {competencyLabels.get(suggestion.competency) ?? suggestion.competency.replaceAll("_", " ")}
+                  </Badge>
+                </div>
+                <h3>{suggestion.title}</h3>
+                <p>{suggestion.description}</p>
+                <strong className="assessment-next-steps-title">ACTION STEPS</strong>
+                <ol className="assessment-next-steps">
+                  {suggestion.action_steps.map((step, stepIndex) => (
+                    <li key={`${stepIndex}-${step}`}>
+                      <CheckSquare2 size={15} />
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      <div className="assessment-guide-link">
+        <BookOpen size={18} />
+        <div>
+          <strong>Continue learning with the Guide Library</strong>
+          <p>Use the relevant wiring and circuit guides while practising these actions.</p>
+        </div>
+        <LinkButton href="/guides" variant="secondary">Open Guides</LinkButton>
       </div>
 
       <div className="wizard-actions">
-        <LinkButton href="/assessments/new/results" variant="secondary" icon={ArrowLeft}>Back</LinkButton>
-        <LinkButton href="/assessments/new/checklist" icon={ArrowRight}>Next: Skill Checklist</LinkButton>
+        <LinkButton href="/assessments/new/results" variant="secondary" icon={ArrowLeft}>
+          Back
+        </LinkButton>
+        <LinkButton href="/assessments/new/checklist" icon={ArrowRight}>
+          Next: Competency Checklist
+        </LinkButton>
       </div>
     </div>
   );

@@ -16,6 +16,7 @@ from app.services.conversations import (
     SupabaseConversationRepository,
 )
 from app.services.llm import LLMProviderError
+from app.services.practical_assessments import PracticalAssessmentProviderError
 
 USER_ID = UUID("d2f7c64a-3e56-4d45-a47d-07331e2a95df")
 CONVERSATION_ID = UUID("11111111-2222-4333-8444-555555555555")
@@ -200,6 +201,7 @@ class FakeChatService:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.history: list[Message] = []
+        self.learner_context: str | None = None
 
     async def generate(
         self,
@@ -207,8 +209,10 @@ class FakeChatService:
         message: str,
         conversation_id: UUID,
         history: list[Message],
+        learner_context: str | None = None,
     ) -> ChatResponse:
         self.history = history
+        self.learner_context = learner_context
         if self.fail:
             raise LLMProviderError("Gemini unavailable")
         return ChatResponse(
@@ -266,6 +270,53 @@ def test_user_turn_remains_persisted_when_gemini_fails() -> None:
         )
 
     assert [entry[0] for entry in repository.created] == ["user"]
+
+
+class FakeAssessmentRepository:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+
+    async def get_personalization_context(self, **_: object) -> str | None:
+        if self.fail:
+            raise PracticalAssessmentProviderError("Supabase unavailable")
+        return "Safety Procedures: 72/100; Tool Usage: 61/100."
+
+
+def test_completed_assessment_context_is_passed_to_chat_generation() -> None:
+    chat = FakeChatService()
+    service = ConversationService(
+        repository=FakeRepository(),  # type: ignore[arg-type]
+        chat_service=chat,  # type: ignore[arg-type]
+        context_message_limit=7,
+        assessment_repository=FakeAssessmentRepository(),  # type: ignore[arg-type]
+    )
+
+    asyncio.run(
+        service.send_message(_user(), CONVERSATION_ID, "Explain safe testing")
+    )
+
+    assert chat.learner_context == (
+        "Safety Procedures: 72/100; Tool Usage: 61/100."
+    )
+
+
+def test_assessment_context_lookup_fails_open_for_chat() -> None:
+    chat = FakeChatService()
+    service = ConversationService(
+        repository=FakeRepository(),  # type: ignore[arg-type]
+        chat_service=chat,  # type: ignore[arg-type]
+        context_message_limit=7,
+        assessment_repository=FakeAssessmentRepository(  # type: ignore[arg-type]
+            fail=True
+        ),
+    )
+
+    result = asyncio.run(
+        service.send_message(_user(), CONVERSATION_ID, "Explain safe testing")
+    )
+
+    assert result.assistant_message.content.startswith("Answer to:")
+    assert chat.learner_context is None
 
 
 def test_only_conversation_routes_are_public_for_chat() -> None:

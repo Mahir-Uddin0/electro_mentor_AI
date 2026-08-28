@@ -3,42 +3,61 @@
 import Link from "next/link";
 import {
   Bot,
-  Camera,
-  CheckSquare,
   CirclePlay,
   FileVideo,
-  History,
   ImagePlus,
   Library,
   ShieldCheck,
-  Upload,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { Badge, Card, ProgressBar, SectionTitle } from "@/components/ui";
-import { frontendApi } from "@/lib/api/client";
-
-const recentHistory = [
-  { title: "Fillet Weld", type: "Possible Undercut", tone: "red" as const, confidence: "88%" },
-  { title: "Fillet Weld", type: "Possible Undercut", tone: "red" as const, confidence: "86%" },
-  { title: "Butt Joint", type: "Good", tone: "green" as const, confidence: "97%" },
-  { title: "Motor Circuit", type: "Missing Ground", tone: "amber" as const, confidence: "91%" },
-];
-
-const upcomingTasks = [
-  { title: "Two-Way Switch Installation", status: "In progress", progress: 86 },
-  { title: "Distribution Board Setup", status: "Pending", progress: 8 },
-  { title: "Motor Starter Panel Wiring", status: "In progress", progress: 42 },
-];
+import { Badge, Card, SectionTitle } from "@/components/ui";
+import { type Task, frontendApi } from "@/lib/api/client";
 
 export default function DashboardPage() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [videoName, setVideoName] = useState("");
   const [greeting, setGreeting] = useState("Welcome back");
+  const [assessmentAction, setAssessmentAction] = useState({
+    href: "/assessments/new/upload",
+    title: "Start your practical assessment",
+    description: "Upload an optional video or continue with manual answers",
+    label: "Start Assessment",
+  });
+  const [upcomingTasks, setUpcomingTasks] = useState<Task[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(true);
 
   useEffect(() => {
     void frontendApi.dashboard().then((data) => setGreeting(data.greeting)).catch(() => {});
+    void frontendApi.getMyPracticalAssessment().then(({ assessment }) => {
+      if (assessment?.status === "completed") {
+        setAssessmentAction({
+          href: "/assessments/new/results",
+          title: "Your competency profile is ready",
+          description: `Review your ${assessment.overall_score ?? 0}% practical assessment and improvement plan`,
+          label: "View Results",
+        });
+      } else if (assessment) {
+        setAssessmentAction({
+          href: "/assessments/new/answers",
+          title: "Continue your practical assessment",
+          description: "Review any video suggestions and finish your ten fixed answers",
+          label: "Resume Assessment",
+        });
+      }
+    }).catch(() => {});
+    void frontendApi
+      .listTasks()
+      .then(({ tasks }) =>
+        setUpcomingTasks(tasks.filter((t) => t.status !== "completed")),
+      )
+      .catch(() => {})
+      .finally(() => setLoadingTasks(false));
   }, []);
+
+  const taskStatusLabel = (status: Task["status"]) =>
+    status === "in_progress" ? "In Progress" : "Upcoming";
+
+  const taskStatusTone = (status: Task["status"]): "blue" | "amber" =>
+    status === "in_progress" ? "blue" : "amber";
 
   return (
     <>
@@ -49,16 +68,18 @@ export default function DashboardPage() {
 
       <SectionTitle title="Quick Actions" />
       <Card style={{ padding: 12 }}>
-        <div className="upload-zone" onClick={() => inputRef.current?.click()} role="button" tabIndex={0}>
+        <div className="upload-zone dashboard-assessment-cta">
           <span className="upload-icon"><FileVideo size={25} /></span>
-          <h2>{videoName || "Upload your practical work video (max 2 min)"}</h2>
-          <p>{videoName ? "Ready to create an AI practical assessment" : "Drag and drop or click to browse"}</p>
+          <h2>{assessmentAction.title}</h2>
+          <p>{assessmentAction.description}</p>
           <div className="inline-actions">
-            <Link href="/assessments/new/upload" className="button button-secondary"><CirclePlay size={16} /> Record Video</Link>
-            <button className="button button-primary" type="button"><Upload size={16} /> Choose File</button>
+            <Link href={assessmentAction.href} className="button button-primary">
+              <CirclePlay size={16} /> {assessmentAction.label}
+            </Link>
           </div>
-          <small style={{ marginTop: 12, color: "var(--muted)" }}>MP4, WebM, MOV · Max 100MB</small>
-          <input ref={inputRef} hidden type="file" accept="video/*" capture="environment" onChange={(event) => setVideoName(event.target.files?.[0]?.name ?? "")} />
+          <small style={{ marginTop: 12, color: "var(--muted)" }}>
+            One-time, user-specific practical competency profile
+          </small>
         </div>
       </Card>
 
@@ -76,25 +97,40 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <SectionTitle title="Recent History" href="/photo-analysis" />
-      <div className="history-grid">
-        {recentHistory.map((item, index) => (
-          <Card className="history-card" key={`${item.title}-${index}`}>
-            <div className="history-thumb">{index % 2 ? <Camera size={20} /> : <History size={20} />}</div>
-            <h3>{item.title}</h3><p>Analyzed {index + 1} day{index ? "s" : ""} ago</p>
-            <div className="history-meta"><Badge tone={item.tone}>{item.type}</Badge><strong>{item.confidence}</strong></div>
-          </Card>
-        ))}
-      </div>
-
       <SectionTitle title="Upcoming Tasks" href="/practice-tracker" />
       <div className="task-list">
-        {upcomingTasks.map((task) => (
-          <Card className="task-row" key={task.title}>
-            <div className="task-row-head"><div><Badge tone={task.progress > 20 ? "blue" : "amber"}>{task.status}</Badge><h3 style={{ marginTop: 8 }}>{task.title}</h3></div><strong>{task.progress}%</strong></div>
-            <ProgressBar value={task.progress} /><p>Complete the practical exercise and request instructor feedback.</p>
+        {loadingTasks ? (
+          <Card className="task-row">
+            <p style={{ color: "var(--muted)" }}>Loading tasks…</p>
           </Card>
-        ))}
+        ) : upcomingTasks.length === 0 ? (
+          <Card className="task-row">
+            <p style={{ color: "var(--muted)" }}>
+              No upcoming tasks. Head to{" "}
+              <Link href="/practice-tracker" style={{ color: "var(--accent)" }}>
+                Practice Tracker
+              </Link>{" "}
+              to add some.
+            </p>
+          </Card>
+        ) : (
+          upcomingTasks.map((task) => (
+            <Card className="task-row" key={task.id}>
+              <div className="task-row-head">
+                <div>
+                  <Badge tone={taskStatusTone(task.status)}>
+                    {taskStatusLabel(task.status)}
+                  </Badge>
+                  <h3 style={{ marginTop: 8 }}>{task.title}</h3>
+                </div>
+                <Badge tone={task.priority === "high" ? "red" : task.priority === "medium" ? "amber" : "green"}>
+                  {task.priority}
+                </Badge>
+              </div>
+              {task.description && <p>{task.description}</p>}
+            </Card>
+          ))
+        )}
       </div>
     </>
   );

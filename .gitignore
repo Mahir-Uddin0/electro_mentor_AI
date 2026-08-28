@@ -24,3 +24,4 @@ frontend/.env.*.local
 frontend/*.tsbuildinfo
 frontend/ui_ux/
 frontend/prd/
+frontend/assesment_video/
