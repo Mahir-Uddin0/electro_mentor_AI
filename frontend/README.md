@@ -34,7 +34,7 @@ Only the Supabase URL and publishable/anon key belong in the browser. Never plac
 
 In Supabase **Authentication → URL Configuration**, set the local site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` as an allowed redirect URL. Add the equivalent HTTPS callback before deploying.
 
-`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, the task tracker, and practical assessment have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
+`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, the task tracker, and learner-profile assessment have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
 
 The API client asks Supabase for a current session before every real backend
 request. Supabase refreshes an expired access token when possible; a failed
@@ -66,14 +66,14 @@ The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
 
 Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in Supabase through FastAPI.
 
-The one-time Video Practical Assessment uses authenticated FastAPI routes under `/api/v1`:
+The one-time learner-profile questionnaire uses authenticated FastAPI routes under `/api/v1`:
 
 - `GET /practical-assessments/me` loads the current user's draft or completed profile and the fixed questionnaire/checklist definitions.
-- `POST /practical-assessments` starts the assessment with required topic/project fields and an optional MP4, MOV, or WebM video up to 100 MB.
+- `POST /practical-assessments` starts the profile with an optional MP4, MOV, or WebM introduction video up to 100 MB.
 - `PUT /practical-assessments/{assessment_id}/answers` saves all ten editable answers.
-- `POST /practical-assessments/{assessment_id}/evaluate` runs the single Gemini evaluation and stores its results.
+- `POST /practical-assessments/{assessment_id}/evaluate` creates and stores the personalized learner profile from the user's final answers and any supported video information.
 
-The six assessment screens share one provider, so a draft can move between the question and answer steps without static placeholder data. Completed scores, improvement suggestions, and the competency checklist are always rendered from the same saved evaluation. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to use this backend flow.
+The six profile screens share one provider, so a draft can move between the question and answer steps without static placeholder data. Gemini fills only answers supported by the optional video; every answer remains user-editable before final submission. Completed profile scores, learning suggestions, and the competency checklist are rendered from the saved user-specific record. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to use this backend flow.
 
 The remaining temporary frontend contract expects `GET /dashboard` and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
 
