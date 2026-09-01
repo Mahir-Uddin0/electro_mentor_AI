@@ -78,12 +78,12 @@ def _evaluation(
 ) -> AssessmentEvaluation:
     score_values = scores or {competency: 80 for competency in COMPETENCY_IDS}
     return AssessmentEvaluation(
-        summary="The available evidence shows a developing practical workflow.",
+        summary="The answers describe a developing electrical learner profile.",
         question_feedback=[
             QuestionFeedback(
                 question_id=question_id,
                 score=8,
-                feedback="The answer identifies a relevant practical step.",
+                feedback="The answer provides relevant learner-profile information.",
                 evidence_basis="answer",
             )
             for question_id in reversed(QUESTION_IDS)
@@ -141,9 +141,7 @@ def _row(**overrides: Any) -> PracticalAssessment:
     values: dict[str, Any] = {
         "id": ASSESSMENT_ID,
         "user_id": USER_ID,
-        "questionnaire_version": "electrical_practical_v1",
-        "topic": "House Wiring",
-        "project_name": "Training board",
+        "questionnaire_version": "learner_profile_v2",
         "status": "draft",
         "video_status": "not_provided",
         "video_file_name": None,
@@ -194,11 +192,54 @@ class FakeUpload:
 
 def test_fixed_question_and_checklist_contract_is_complete() -> None:
     assert len(QUESTION_IDS) == len(set(QUESTION_IDS)) == 10
-    assert "tool_inspection" in QUESTION_IDS
-    assert "fault_correction" not in QUESTION_IDS
+    assert QUESTION_IDS == (
+        "electrical_experience",
+        "training_background",
+        "systems_familiarity",
+        "safety_habits",
+        "tools_familiarity",
+        "troubleshooting_approach",
+        "work_quality_habits",
+        "documentation_habits",
+        "confidence_support_needs",
+        "learning_goals_preferences",
+    )
     assert len(COMPETENCY_IDS) == 6
     assert sum(len(ids) for ids in CHECKLIST_IDS_BY_COMPETENCY.values()) == 18
     assert len(CHECKLIST_LABELS) == 18
+
+
+@pytest.mark.parametrize(
+    ("confidence", "evidence"),
+    [(0, None), (49, "At 00:08 the learner states this."), (80, None)],
+)
+def test_weak_video_suggestions_are_left_empty(
+    confidence: int,
+    evidence: str | None,
+) -> None:
+    suggestion = VideoAnswerSuggestion(
+        question_id=QUESTION_IDS[0],
+        answer="The learner reports two years of supervised practice.",
+        confidence=confidence,
+        evidence=evidence,
+    )
+
+    assert suggestion.answer is None
+    assert suggestion.confidence == 0
+    assert suggestion.evidence is None
+
+
+def test_supported_video_suggestion_is_retained() -> None:
+    suggestion = VideoAnswerSuggestion(
+        question_id=QUESTION_IDS[0],
+        answer="The learner reports two years of supervised practice.",
+        confidence=50,
+        evidence="At 00:08 the learner states this.",
+    )
+
+    assert suggestion.answer is not None
+    assert suggestion.confidence == 50
+    assert suggestion.evidence is not None
 
 
 def test_video_is_streamed_validated_hashed_and_removed() -> None:
@@ -290,7 +331,7 @@ def test_repository_reads_with_user_jwt_and_writes_with_opaque_secret() -> None:
             return await repository.update_draft(
                 assessment=current,
                 access_token="user-jwt",
-                updates={"topic": "Updated topic"},
+                updates={"video_status": "not_provided"},
             )
 
     assert asyncio.run(run()).revision == 2
@@ -364,14 +405,16 @@ class FakeAnalyzer:
                 VideoAnswerSuggestion(
                     question_id=question_id,
                     answer=(
-                        "The supply was isolated and checked."
-                        if question_id == "safety_isolation"
+                        "The learner reports two years of supervised practice."
+                        if question_id == "electrical_experience"
                         else None
                     ),
-                    confidence=82 if question_id == "safety_isolation" else 0,
+                    confidence=(
+                        82 if question_id == "electrical_experience" else 0
+                    ),
                     evidence=(
-                        "At 00:08 the learner operates an isolator and tests."
-                        if question_id == "safety_isolation"
+                        "At 00:08 the learner states their experience."
+                        if question_id == "electrical_experience"
                         else None
                     ),
                 )
@@ -454,14 +497,11 @@ def test_optional_video_autofill_and_failure_fall_back_to_manual(
     result = asyncio.run(
         success_service.start(
             _user(),
-            topic=" House   Wiring ",
-            project_name=" Training board ",
             video=_validated_video(tmp_path),
         )
     )
 
     assert result.video_status == "analyzed"
-    assert result.topic == "House Wiring"
     assert result.answers[0].answer_source == "ai"
     assert result.answers[1].answer is None
 
@@ -473,8 +513,6 @@ def test_optional_video_autofill_and_failure_fall_back_to_manual(
     failed = asyncio.run(
         failure_service.start(
             _user(),
-            topic="House Wiring",
-            project_name="Training board",
             video=_validated_video(tmp_path),
         )
     )
@@ -493,8 +531,6 @@ def test_no_video_starts_manual_draft_without_calling_gemini() -> None:
     result = asyncio.run(
         service.start(
             _user(),
-            topic="House Wiring",
-            project_name="Training board",
             video=None,
         )
     )
@@ -549,8 +585,6 @@ def test_resume_without_video_preserves_observations_and_cleared_answer(
     resumed = asyncio.run(
         service.start(
             _user(),
-            topic="House Wiring",
-            project_name="Training board",
             video=None,
         )
     )
@@ -598,7 +632,7 @@ def test_user_answers_derive_source_and_completed_evaluation_is_deterministic() 
             {
                 "question_id": question_id,
                 "answer": (
-                    "USER SECRET RAW ANSWER"
+                    "I learn best from diagrams and short supervised examples."
                     if question_id == QUESTION_IDS[0]
                     else "Complete learner answer"
                 ),
@@ -621,7 +655,12 @@ def test_user_answers_derive_source_and_completed_evaluation_is_deterministic() 
         COMPETENCY_IDS
     )
     assert completed.evaluation.skill_scores[0].label == "Safety Procedures"
-    assert "USER SECRET RAW ANSWER" not in completed.personalization_context
+    assert "I learn best from diagrams" in completed.personalization_context
+    assert len(completed.personalization_context or "") <= 4_000
+    assert all(
+        question_id in (completed.personalization_context or "")
+        for question_id in QUESTION_IDS
+    )
     assert "Repeat the safe verification" not in completed.personalization_context
 
 
@@ -760,23 +799,25 @@ def test_get_endpoint_always_returns_fixed_wrapper() -> None:
     assert len(body["checklist_definitions"]) == 6
 
 
-def test_start_endpoint_returns_controlled_validation_error_for_blank_form() -> None:
+def test_start_endpoint_does_not_require_topic_or_project_metadata() -> None:
+    called: dict[str, object] = {}
+
     class Service:
-        async def start(self, *_: object, **__: object) -> None:
-            raise ValueError("Topic cannot be blank")
+        async def start(self, *_: object, **kwargs: object) -> PracticalAssessment:
+            called.update(kwargs)
+            return _row()
 
     app.dependency_overrides[get_current_user] = _user
     app.dependency_overrides[get_practical_assessment_service] = Service
     try:
-        response = TestClient(app).post(
-            "/api/v1/practical-assessments",
-            data={"topic": "   ", "project_name": "Training board"},
-        )
+        response = TestClient(app).post("/api/v1/practical-assessments")
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "Topic cannot be blank"
+    assert response.status_code == 201
+    assert called == {"video": None}
+    assert "topic" not in response.json()["assessment"]
+    assert "project_name" not in response.json()["assessment"]
 
 
 def test_repository_rejects_stale_compare_and_set() -> None:
@@ -804,7 +845,7 @@ def test_repository_rejects_stale_compare_and_set() -> None:
             await repository.update_draft(
                 assessment=_row(),
                 access_token="user-jwt",
-                updates={"topic": "Changed"},
+                updates={"video_status": "failed"},
             )
 
     with pytest.raises(PracticalAssessmentConflictError, match="changed"):
