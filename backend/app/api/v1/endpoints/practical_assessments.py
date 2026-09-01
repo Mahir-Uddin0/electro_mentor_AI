@@ -1,4 +1,4 @@
-"""Authenticated endpoints for the one-time practical video assessment."""
+"""Authenticated endpoints for the one-time electrical learner profile."""
 
 from typing import Annotated
 from uuid import UUID
@@ -7,7 +7,6 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
-    Form,
     HTTPException,
     UploadFile,
     status,
@@ -49,7 +48,7 @@ AssessmentServiceDependency = Annotated[
 @router.get(
     "/me",
     response_model=PracticalAssessmentResponse,
-    summary="Get the signed-in user's one-time practical assessment",
+    summary="Get the signed-in user's one-time learner profile",
 )
 async def get_my_practical_assessment(
     user: CurrentUser,
@@ -68,17 +67,15 @@ async def get_my_practical_assessment(
     "",
     response_model=PracticalAssessmentResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Start or resume the one-time practical assessment",
+    summary="Start or resume the one-time learner profile",
 )
 async def start_practical_assessment(
-    topic: Annotated[str, Form(min_length=1, max_length=120)],
-    project_name: Annotated[str, Form(min_length=1, max_length=160)],
     user: CurrentUser,
     service: AssessmentServiceDependency,
     settings: Annotated[Settings, Depends(get_settings)],
     video: Annotated[
         UploadFile | None,
-        File(description="Optional MP4, MOV, or WebM practical-work video"),
+        File(description="Optional MP4, MOV, or WebM learner-introduction video"),
     ] = None,
 ) -> PracticalAssessmentResponse:
     prepared_video = None
@@ -90,8 +87,6 @@ async def start_practical_assessment(
             )
         assessment = await service.start(
             user,
-            topic=topic,
-            project_name=project_name,
             video=prepared_video,
         )
         return assessment_response(assessment)
@@ -134,7 +129,7 @@ async def start_practical_assessment(
 @router.put(
     "/{assessment_id}/answers",
     response_model=PracticalAssessmentResponse,
-    summary="Save all ten editable practical-assessment answers",
+    summary="Save all ten editable learner-profile answers",
 )
 async def update_practical_assessment_answers(
     assessment_id: UUID,
@@ -164,7 +159,7 @@ async def update_practical_assessment_answers(
 @router.post(
     "/{assessment_id}/evaluate",
     response_model=PracticalAssessmentResponse,
-    summary="Evaluate and permanently complete the practical assessment",
+    summary="Create and permanently complete the learner profile",
 )
 async def evaluate_practical_assessment(
     assessment_id: UUID,
@@ -193,7 +188,7 @@ async def evaluate_practical_assessment(
 def _not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail="Practical assessment not found.",
+        detail="Learner profile not found.",
     )
 
 
@@ -206,7 +201,7 @@ def _translate_provider_error(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "The Supabase practical assessment table is missing. Run "
+                "The Supabase learner-profile table is missing. Run "
                 "backend/supabase/practical_assessment.sql in the Supabase SQL "
                 "Editor."
             ),
@@ -215,11 +210,11 @@ def _translate_provider_error(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "Practical assessment storage or Gemini assessment is not "
+                "Learner-profile storage or Gemini analysis is not "
                 "configured."
             ),
         )
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        detail="Practical assessment storage or analysis is temporarily unavailable.",
+        detail="Learner-profile storage or analysis is temporarily unavailable.",
     )
