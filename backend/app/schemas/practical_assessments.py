@@ -1,4 +1,4 @@
-"""Public contracts for the one-time practical skills assessment."""
+"""Public contracts for the one-time electrical learner profile."""
 
 from datetime import datetime
 from typing import Literal, Self
@@ -7,16 +7,16 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 QuestionId = Literal[
-    "safety_isolation",
-    "safety_ppe",
-    "tool_selection",
-    "tool_inspection",
-    "task_understanding",
-    "component_connections",
-    "workmanship",
-    "pre_energization_checks",
-    "functional_testing",
-    "documentation",
+    "electrical_experience",
+    "training_background",
+    "systems_familiarity",
+    "safety_habits",
+    "tools_familiarity",
+    "troubleshooting_approach",
+    "work_quality_habits",
+    "documentation_habits",
+    "confidence_support_needs",
+    "learning_goals_preferences",
 ]
 CompetencyId = Literal[
     "safety_procedures",
@@ -71,81 +71,84 @@ class ChecklistSectionDefinition(BaseModel):
 
 FIXED_QUESTIONS: tuple[AssessmentQuestionDefinition, ...] = (
     AssessmentQuestionDefinition(
-        id="safety_isolation",
+        id="electrical_experience",
         prompt=(
-            "How did you isolate the electrical supply and verify absence of "
-            "voltage before starting?"
-        ),
-        competency="safety_procedures",
-    ),
-    AssessmentQuestionDefinition(
-        id="safety_ppe",
-        prompt="What PPE and other safety precautions did you use?",
-        competency="safety_procedures",
-    ),
-    AssessmentQuestionDefinition(
-        id="tool_selection",
-        prompt=(
-            "Which tools and test instruments did you use, and why were they "
-            "suitable and correctly rated?"
-        ),
-        competency="tool_usage",
-    ),
-    AssessmentQuestionDefinition(
-        id="tool_inspection",
-        prompt=(
-            "How did you confirm that the tools, leads, and test instruments "
-            "were safe and correctly rated?"
-        ),
-        competency="tool_usage",
-    ),
-    AssessmentQuestionDefinition(
-        id="task_understanding",
-        prompt=(
-            "What circuit or task were you working on, and what should it do "
-            "when completed?"
+            "How would you describe your current electrical experience, "
+            "including how long and in what settings you have learned or worked?"
         ),
         competency="technical_knowledge",
     ),
     AssessmentQuestionDefinition(
-        id="component_connections",
+        id="training_background",
         prompt=(
-            "Explain your component and conductor selection and the terminal "
-            "connections you made."
+            "What electrical education, training, certifications, "
+            "apprenticeships, or informal learning have you completed?"
         ),
         competency="technical_knowledge",
     ),
     AssessmentQuestionDefinition(
-        id="workmanship",
+        id="systems_familiarity",
         prompt=(
-            "What did you do to make the connections secure, neat, and "
-            "mechanically sound?"
+            "Which electrical systems, circuits, equipment, or types of tasks "
+            "are you already familiar with?"
+        ),
+        competency="technical_knowledge",
+    ),
+    AssessmentQuestionDefinition(
+        id="safety_habits",
+        prompt=(
+            "What safety steps and personal protective equipment do you "
+            "normally use before and during electrical work?"
+        ),
+        competency="safety_procedures",
+    ),
+    AssessmentQuestionDefinition(
+        id="tools_familiarity",
+        prompt=(
+            "Which hand tools and electrical test instruments can you use "
+            "confidently, and which ones are less familiar?"
+        ),
+        competency="tool_usage",
+    ),
+    AssessmentQuestionDefinition(
+        id="troubleshooting_approach",
+        prompt=(
+            "When an electrical circuit or device is not working, how do you "
+            "usually troubleshoot it?"
+        ),
+        competency="testing_verification",
+    ),
+    AssessmentQuestionDefinition(
+        id="work_quality_habits",
+        prompt=(
+            "What habits do you follow to keep wiring and connections neat, "
+            "secure, protected, and reliable?"
         ),
         competency="work_quality",
     ),
     AssessmentQuestionDefinition(
-        id="pre_energization_checks",
+        id="documentation_habits",
         prompt=(
-            "What visual, continuity, or other checks did you perform before "
-            "energizing the circuit?"
-        ),
-        competency="testing_verification",
-    ),
-    AssessmentQuestionDefinition(
-        id="functional_testing",
-        prompt=(
-            "What measurements or functional tests did you perform, and what "
-            "were the results?"
-        ),
-        competency="testing_verification",
-    ),
-    AssessmentQuestionDefinition(
-        id="documentation",
-        prompt=(
-            "What labels, diagram changes, test readings, or completion records "
-            "did you produce?"
+            "How do you normally record diagrams, labels, measurements, faults, "
+            "or completed work?"
         ),
         competency="documentation",
+    ),
+    AssessmentQuestionDefinition(
+        id="confidence_support_needs",
+        prompt=(
+            "Which electrical topics are you most confident in, and where do "
+            "you want more guidance?"
+        ),
+        competency="technical_knowledge",
+    ),
+    AssessmentQuestionDefinition(
+        id="learning_goals_preferences",
+        prompt=(
+            "What are your electrical learning goals, and how do you prefer "
+            "technical explanations or instructions to be presented?"
+        ),
+        competency="technical_knowledge",
     ),
 )
 
@@ -156,15 +159,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="safety_supply_isolated",
-                label="Supply isolated and locked out before work",
+                label="Describes isolating the supply before electrical work",
             ),
             ChecklistCriterionDefinition(
                 id="safety_absence_verified",
-                label="Absence of voltage verified with a suitable tester",
+                label="Describes verifying absence of voltage safely",
             ),
             ChecklistCriterionDefinition(
                 id="safety_ppe_area",
-                label="Appropriate PPE and a safe work area maintained",
+                label="Identifies appropriate PPE and safe work-area habits",
             ),
         ],
     ),
@@ -174,15 +177,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="tools_selected",
-                label="Correctly rated tools and instruments selected",
+                label="Reports familiarity with suitable, correctly rated tools",
             ),
             ChecklistCriterionDefinition(
                 id="tools_used_correctly",
-                label="Tools and instruments used correctly",
+                label="Describes safe and appropriate tool or instrument use",
             ),
             ChecklistCriterionDefinition(
                 id="tools_condition_control",
-                label="Tools kept safe, serviceable, and controlled",
+                label="Describes checking and caring for tools and test leads",
             ),
         ],
     ),
@@ -192,15 +195,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="technical_operation",
-                label="Intended circuit operation explained correctly",
+                label="Explains familiar electrical concepts at the reported level",
             ),
             ChecklistCriterionDefinition(
                 id="technical_components",
-                label="Components, conductors, and terminals identified correctly",
+                label="Identifies systems, components, or circuits already familiar",
             ),
             ChecklistCriterionDefinition(
                 id="technical_sequence",
-                label="A technically sound work sequence or diagram followed",
+                label="Recognizes current knowledge limits and support needs",
             ),
         ],
     ),
@@ -210,15 +213,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="quality_terminations",
-                label="Terminations secure with no exposed conductor",
+                label="Describes habits for secure and reliable terminations",
             ),
             ChecklistCriterionDefinition(
                 id="quality_routing",
-                label="Cable routing neat, supported, and protected",
+                label="Describes neat, supported, and protected cable routing",
             ),
             ChecklistCriterionDefinition(
                 id="quality_integrity",
-                label="Components and cables undamaged and mechanically sound",
+                label="Describes checking mechanical condition and integrity",
             ),
         ],
     ),
@@ -228,15 +231,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="testing_prechecks",
-                label="Pre-energization visual and continuity checks completed",
+                label="Describes a systematic and safe troubleshooting approach",
             ),
             ChecklistCriterionDefinition(
                 id="testing_instrument",
-                label="Correct test method, instrument, and range used",
+                label="Reports selecting suitable test methods and instrument ranges",
             ),
             ChecklistCriterionDefinition(
                 id="testing_results",
-                label="Test results recorded and interpreted before completion",
+                label="Describes interpreting and verifying test results",
             ),
         ],
     ),
@@ -246,15 +249,15 @@ FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
         criteria=[
             ChecklistCriterionDefinition(
                 id="docs_labels",
-                label="Circuits, conductors, and components labelled",
+                label="Reports using clear circuit, conductor, or component labels",
             ),
             ChecklistCriterionDefinition(
                 id="docs_diagram",
-                label="Diagram or connection record produced or updated",
+                label="Reports creating or updating diagrams and connection records",
             ),
             ChecklistCriterionDefinition(
                 id="docs_results",
-                label="Readings, issues, and completion outcome documented",
+                label="Reports documenting readings, faults, and outcomes",
             ),
         ],
     ),
@@ -274,6 +277,8 @@ CHECKLIST_LABELS = {
     for section in FIXED_CHECKLIST
     for item in section.criteria
 }
+
+MIN_VIDEO_SUGGESTION_CONFIDENCE = 50
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -295,8 +300,16 @@ class VideoAnswerSuggestion(BaseModel):
         return _normalize_optional_text(value)
 
     @model_validator(mode="after")
-    def empty_suggestion_has_no_confidence(self) -> Self:
-        if self.answer is None:
+    def discard_unsupported_suggestion(self) -> Self:
+        # A model-produced answer is only an autofill candidate when Gemini
+        # supplies both a concrete evidence note and meaningful confidence.
+        # Anything weaker remains empty for the learner to answer manually.
+        if (
+            self.answer is None
+            or self.evidence is None
+            or self.confidence < MIN_VIDEO_SUGGESTION_CONFIDENCE
+        ):
+            self.answer = None
             self.confidence = 0
             self.evidence = None
         return self
@@ -436,8 +449,6 @@ class PracticalAssessment(BaseModel):
     id: UUID
     user_id: UUID
     questionnaire_version: str
-    topic: str
-    project_name: str
     status: AssessmentStatus
     video_status: VideoStatus
     video_file_name: str | None
