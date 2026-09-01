@@ -73,13 +73,13 @@ the named-conversation and ordered-message tables, upgrades any rows from the
 old flat history schema, and installs ownership constraints, indexes, grants,
 triggers, and Row Level Security policies. Also run
 `backend/supabase/tasks.sql` for the task tracker and
-`backend/supabase/practical_assessment.sql` for each user's one-time practical
-assessment and competency profile. Then configure `backend/.env`:
+`backend/supabase/practical_assessment.sql` for each user's one-time learner
+profile. Then configure `backend/.env`:
 
 ```env
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_API_KEY=your-publishable-or-anon-key
-# Server-only secret key used for trusted assessment writes. Never expose it
+# Server-only secret key used for trusted profile writes. Never expose it
 # through a NEXT_PUBLIC_* variable.
 SUPABASE_SECRET_KEY=your-sb_secret-key-or-legacy-service-role-jwt
 # Optional: required only if the project still issues legacy HS256 tokens.
@@ -115,13 +115,19 @@ The authenticated `/api/v1/tasks` endpoints list, create, update, and delete
 only the current user's tasks. Task status advances from `upcoming` to
 `in_progress` to `completed`; active tasks are ordered by priority and due date.
 
-The authenticated `/api/v1/practical-assessments` workflow accepts an optional
-MP4/MOV/WebM video, returns the fixed ten-question assessment, saves editable
-answers, and asks Gemini for the final six competency scores, improvement plan,
-and fixed eighteen-item checklist. Raw video bytes are not stored in Supabase.
-Once completed, the row is immutable and its compact competency summary is
-included as untrusted personalization context in later RAG chats without
-weakening electrical-safety instructions. See
+The authenticated `/api/v1/practical-assessments` workflow creates a one-time
+electrical learner profile. It accepts an optional MP4/MOV/WebM introduction
+video and returns ten fixed questions about the user's experience, training,
+safety habits, tools, troubleshooting approach, documentation, support needs,
+and learning preferences. Gemini suggests only answers directly supported by
+the video; unsupported answers stay empty, and every suggestion remains editable
+before all ten final question-and-answer records are saved for that user.
+
+Gemini then produces self-reported competency estimates and learning suggestions,
+not a work evaluation, qualification, or safety certification. Raw video bytes
+are not stored in Supabase. Once completed, the profile row is immutable and its
+compact summary is included as untrusted personalization context in later RAG
+chats without weakening electrical-safety instructions. See
 `backend/supabase/README.md` for the endpoint and migration details.
 
 ### Ingest all PDFs
