@@ -12,6 +12,7 @@ import {
   LinkButton,
   PageHeading,
 } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import {
   frontendApi,
   type SafetyChecklistDocument,
@@ -28,6 +29,7 @@ function downloadUrl(url: string, filename: string) {
 
 export default function SafetyChecklistPdfPage() {
   const params = useParams<{ id: string }>();
+  const { locale, t } = useLanguage();
   const [document, setDocument] = useState<SafetyChecklistDocument | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [loading, setLoading] = useState(true);
@@ -40,7 +42,7 @@ export default function SafetyChecklistPdfPage() {
       try {
         const { documents } = await frontendApi.listSafetyChecklists();
         const selected = documents.find((item) => item.id === params.id);
-        if (!selected) throw new Error("Safety checklist not found.");
+        if (!selected) throw new Error(t("Safety checklist not found."));
         const blob = await frontendApi.getSafetyChecklistFile(selected.id);
         objectUrl = URL.createObjectURL(blob);
         if (!active) {
@@ -54,7 +56,7 @@ export default function SafetyChecklistPdfPage() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : "The safety-checklist PDF could not be opened.",
+              : t("The safety-checklist PDF could not be opened."),
           );
         }
       } finally {
@@ -65,12 +67,12 @@ export default function SafetyChecklistPdfPage() {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [params.id]);
+  }, [params.id, t]);
 
   if (loading) {
     return (
       <div className="full-loader" style={{ minHeight: 420, background: "transparent" }}>
-        <span className="spinner" /> Opening safety-checklist PDF…
+        <span className="spinner" /> {t("Opening safety-checklist PDF…")}
       </div>
     );
   }
@@ -78,13 +80,13 @@ export default function SafetyChecklistPdfPage() {
   if (!document || !pdfUrl) {
     return (
       <>
-        <PageHeading title="Safety Checklist" />
+        <PageHeading title={t("Safety Checklist")} />
         <Card className="empty-state">
           <span className="empty-icon"><FileWarning size={28} /></span>
-          <h2>PDF unavailable</h2>
-          <p>{error || "This safety checklist could not be found."}</p>
+          <h2>{t("PDF unavailable")}</h2>
+          <p>{error || t("This safety checklist could not be found.")}</p>
           <LinkButton href="/safety-checklists" icon={RotateCcw}>
-            Back to Safety Checklists
+            {t("Back to Safety Checklists")}
           </LinkButton>
         </Card>
       </>
@@ -105,7 +107,7 @@ export default function SafetyChecklistPdfPage() {
           fontWeight: 700,
         }}
       >
-        <ArrowLeft size={14} /> Back to Safety Checklists
+        <ArrowLeft size={14} /> {t("Back to Safety Checklists")}
       </Link>
 
       <PageHeading
@@ -117,7 +119,7 @@ export default function SafetyChecklistPdfPage() {
             icon={Download}
             onClick={() => downloadUrl(pdfUrl, document.filename)}
           >
-            Download PDF
+            {t("Download PDF")}
           </Button>
         }
       />
@@ -125,7 +127,7 @@ export default function SafetyChecklistPdfPage() {
       <div className="chips" style={{ marginBottom: 14 }}>
         <Badge tone="blue">PDF</Badge>
         {document.page_count && (
-          <Badge tone="gray">{document.page_count} pages</Badge>
+          <Badge tone="gray">{t("{{count}} pages", { count: new Intl.NumberFormat(locale).format(document.page_count) })}</Badge>
         )}
       </div>
 

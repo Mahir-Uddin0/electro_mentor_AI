@@ -25,6 +25,7 @@ import {
 } from "react";
 
 import { Button, Card } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import {
   ApiError,
   frontendApi,
@@ -45,8 +46,8 @@ function messageTitle(message: string) {
   return words.length < message.trim().length ? `${words}…` : words;
 }
 
-function sourceLabel(source: ConversationSource) {
-  return source.title ?? source.source ?? "Retrieved source";
+function sourceLabel(source: ConversationSource, fallback: string) {
+  return source.title ?? source.source ?? fallback;
 }
 
 function conversationHref(conversationId?: string | null) {
@@ -71,6 +72,7 @@ function upsertConversation(
 
 export default function AssistantPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -115,12 +117,12 @@ export default function AssistantPage() {
         }));
       } catch (caught) {
         if (requestId !== openRequestRef.current) return;
-        setError(caught instanceof Error ? caught.message : "Could not open this conversation.");
+        setError(caught instanceof Error ? caught.message : t("Could not open this conversation."));
       } finally {
         if (requestId === openRequestRef.current) setThreadLoading(false);
       }
     },
-    [router],
+    [router, t],
   );
 
   const startNewConversation = useCallback(
@@ -152,7 +154,7 @@ export default function AssistantPage() {
         if (requestedConversation) void openConversation(requestedConversation, false);
       })
       .catch((caught) => {
-        if (active) setError(caught instanceof Error ? caught.message : "Could not load conversations.");
+        if (active) setError(caught instanceof Error ? caught.message : t("Could not load conversations."));
       })
       .finally(() => {
         if (active) setListLoading(false);
@@ -162,7 +164,7 @@ export default function AssistantPage() {
       openRequestRef.current += 1;
       sendRequestRef.current += 1;
     };
-  }, [openConversation]);
+  }, [openConversation, t]);
 
   useEffect(() => {
     function handleHistoryNavigation() {
@@ -255,7 +257,7 @@ export default function AssistantPage() {
         setMessages(previousMessages);
         setInput(content);
       }
-      setError(caught instanceof Error ? caught.message : "The assistant is unavailable.");
+      setError(caught instanceof Error ? caught.message : t("The assistant is unavailable."));
     } finally {
       if (requestId === sendRequestRef.current) setSending(false);
     }
@@ -276,20 +278,20 @@ export default function AssistantPage() {
       setConversations((current) => upsertConversation(current, updated));
       setRenamingId(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not rename the conversation.");
+      setError(caught instanceof Error ? caught.message : t("Could not rename the conversation."));
     }
   }
 
   async function deleteConversation(event: MouseEvent, conversationId: string) {
     event.stopPropagation();
-    if (!window.confirm("Delete this conversation and all of its messages?")) return;
+    if (!window.confirm(t("Delete this conversation and all of its messages?"))) return;
     setError("");
     try {
       await frontendApi.deleteConversation(conversationId);
       setConversations((current) => current.filter((conversation) => conversation.id !== conversationId));
       if (activeConversationRef.current === conversationId) startNewConversation();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not delete the conversation.");
+      setError(caught instanceof Error ? caught.message : t("Could not delete the conversation."));
     }
   }
 
@@ -303,25 +305,25 @@ export default function AssistantPage() {
         <button
           className="conversation-drawer-scrim"
           onClick={() => setHistoryOpen(false)}
-          aria-label="Close conversation history"
+          aria-label={t("Close conversation history")}
         />
       )}
-      <aside className={`conversation-list ${historyOpen ? "open" : ""}`} aria-label="Conversation history">
+      <aside className={`conversation-list ${historyOpen ? "open" : ""}`} aria-label={t("Assessment History")}>
         <div className="conversation-sidebar-head">
-          <strong>Chats</strong>
-          <button className="icon-button conversation-mobile-close" onClick={() => setHistoryOpen(false)} aria-label="Close history">
+          <strong>{t("Chats")}</strong>
+          <button className="icon-button conversation-mobile-close" onClick={() => setHistoryOpen(false)} aria-label={t("Close history")}>
             <X size={17} />
           </button>
         </div>
         <Button icon={Plus} className="conversation-new" onClick={() => startNewConversation()}>
-          New conversation
+          {t("New conversation")}
         </Button>
-        <h2>Recent conversations</h2>
+        <h2>{t("Recent conversations")}</h2>
         <div className="conversation-items">
           {listLoading ? (
-            <div className="conversation-status"><span className="spinner" /> Loading chats…</div>
+            <div className="conversation-status"><span className="spinner" /> {t("Loading chats…")}</div>
           ) : conversations.length === 0 ? (
-            <div className="conversation-status"><MessageSquare size={18} /><span>Your conversations will appear here.</span></div>
+            <div className="conversation-status"><MessageSquare size={18} /><span>{t("Your conversations will appear here.")}</span></div>
           ) : (
             conversations.map((conversation) => (
               <div
@@ -339,20 +341,20 @@ export default function AssistantPage() {
                       value={renameValue}
                       onChange={(event) => setRenameValue(event.target.value)}
                       onKeyDown={(event) => { if (event.key === "Escape") setRenamingId(null); }}
-                      aria-label="Conversation title"
+                      aria-label={t("Conversation title")}
                     />
-                    <button type="submit" aria-label="Save title"><Check size={14} /></button>
-                    <button type="button" onClick={() => setRenamingId(null)} aria-label="Cancel rename"><X size={14} /></button>
+                    <button type="submit" aria-label={t("Save title")}><Check size={14} /></button>
+                    <button type="button" onClick={() => setRenamingId(null)} aria-label={t("Cancel rename")}><X size={14} /></button>
                   </form>
                 ) : (
                   <>
                     <button className="conversation-open" onClick={() => void openConversation(conversation.id)}>
                       <strong>{conversation.title}</strong>
-                      <span>{conversation.last_message === undefined ? "Open conversation" : conversation.last_message || "No messages yet"}</span>
+                      <span>{conversation.last_message === undefined ? t("Open conversation") : conversation.last_message || t("No messages yet")}</span>
                     </button>
                     <div className="conversation-actions">
-                      <button onClick={(event) => beginRename(event, conversation)} aria-label={`Rename ${conversation.title}`}><Pencil size={13} /></button>
-                      <button onClick={(event) => void deleteConversation(event, conversation.id)} aria-label={`Delete ${conversation.title}`}><Trash2 size={13} /></button>
+                      <button onClick={(event) => beginRename(event, conversation)} aria-label={`${t("Edit")} ${conversation.title}`}><Pencil size={13} /></button>
+                      <button onClick={(event) => void deleteConversation(event, conversation.id)} aria-label={`${t("Delete")} ${conversation.title}`}><Trash2 size={13} /></button>
                     </div>
                   </>
                 )}
@@ -364,23 +366,23 @@ export default function AssistantPage() {
 
       <section className="chat-panel">
         <header className="chat-toolbar">
-          <button className="icon-button conversation-mobile-button" onClick={() => setHistoryOpen(true)} aria-label="Open conversation history">
+          <button className="icon-button conversation-mobile-button" onClick={() => setHistoryOpen(true)} aria-label={t("Open conversation history")}>
             <PanelLeft size={18} />
           </button>
-          <div><strong>{activeConversation?.title ?? "New conversation"}</strong><span>{activeConversation ? `${activeConversation.message_count ?? messages.length} messages` : "Ask a new question"}</span></div>
-          <button className="icon-button" onClick={() => startNewConversation()} aria-label="Start a new conversation"><Plus size={18} /></button>
+          <div><strong>{activeConversation?.title ?? t("New conversation")}</strong><span>{activeConversation ? t("{{count}} messages", { count: activeConversation.message_count ?? messages.length }) : t("Ask a new question")}</span></div>
+          <button className="icon-button" onClick={() => startNewConversation()} aria-label={t("Start a new conversation")}><Plus size={18} /></button>
         </header>
 
         <div className="chat-thread" aria-live="polite" aria-busy={threadLoading || sending}>
           {threadLoading ? (
-            <div className="chat-loading"><span className="spinner" /><span>Opening conversation…</span></div>
+            <div className="chat-loading"><span className="spinner" /><span>{t("Opening conversation…")}</span></div>
           ) : messages.length === 0 ? (
             <div className="chat-empty">
               <span className="empty-icon"><Sparkles size={28} /></span>
-              <h2>How can I help with your electrical work?</h2>
-              <p>Ask a question and I’ll use your course guides to give safe, practical steps.</p>
+              <h2>{t("How can I help with your electrical work?")}</h2>
+              <p>{t("Ask a question and I’ll use your course guides to give safe, practical steps.")}</p>
               <div className="suggested-prompts">
-                {prompts.map((prompt) => <button key={prompt} onClick={() => setInput(prompt)}>{prompt}</button>)}
+                {prompts.map((prompt) => <button key={prompt} onClick={() => setInput(t(prompt))}>{t(prompt)}</button>)}
               </div>
             </div>
           ) : messages.map((message) => (
@@ -391,7 +393,7 @@ export default function AssistantPage() {
                 {!!message.sources?.length && (
                   <div className="source-list">
                     {message.sources.map((source, index) => (
-                      <span className="source-pill" key={`${sourceLabel(source)}-${index}`}>{sourceLabel(source)}</span>
+                      <span className="source-pill" key={`${sourceLabel(source, t("Retrieved source"))}-${index}`}>{sourceLabel(source, t("Retrieved source"))}</span>
                     ))}
                   </div>
                 )}
@@ -401,12 +403,12 @@ export default function AssistantPage() {
           {sending && (
             <div className="message">
               <span className="message-avatar"><Bot size={16} /></span>
-              <div className="message-bubble assistant-thinking"><span className="spinner" /> Searching your guides…</div>
+              <div className="message-bubble assistant-thinking"><span className="spinner" /> {t("Searching your guides…")}</div>
             </div>
           )}
           {error && (
             <div className="alert alert-red chat-error">
-              <div><strong>Couldn’t complete the request</strong><p>{error}</p></div>
+              <div><strong>{t("Couldn’t complete the request")}</strong><p>{error}</p></div>
             </div>
           )}
           <div ref={bottomRef} />
@@ -414,11 +416,11 @@ export default function AssistantPage() {
 
         <div className="chat-composer-wrap">
           <form className="chat-composer" onSubmit={submit}>
-            <button className="icon-button" type="button" aria-label="Attach a photo"><Paperclip size={18} /></button>
+            <button className="icon-button" type="button" aria-label={t("Attach a photo")}><Paperclip size={18} /></button>
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Ask about wiring, circuits, safety, or troubleshooting…"
+              placeholder={t("Ask about wiring, circuits, safety, or troubleshooting…")}
               disabled={threadLoading}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -427,9 +429,9 @@ export default function AssistantPage() {
                 }
               }}
             />
-            <Button icon={Send} disabled={!input.trim() || sending || threadLoading} aria-label="Send message">Send</Button>
+            <Button icon={Send} disabled={!input.trim() || sending || threadLoading} aria-label={t("Send message")}>{t("Send")}</Button>
           </form>
-          <p className="chat-disclaimer">AI answers can be wrong. Isolate electrical supplies and follow qualified supervision.</p>
+          <p className="chat-disclaimer">{t("AI answers can be wrong. Isolate electrical supplies and follow qualified supervision.")}</p>
         </div>
       </section>
     </Card>

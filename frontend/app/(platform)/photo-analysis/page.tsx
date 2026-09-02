@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useLanguage } from "@/components/language-provider";
 import { RecentPhotoAnalyses } from "@/components/photo-analysis/recent-analyses";
 import { Button, Card, PageHeading } from "@/components/ui";
 import type { PhotoAnalysisResult } from "@/lib/api/client";
@@ -23,6 +24,7 @@ import {
 
 export default function PhotoAnalysisPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const { user } = useAuth();
   const ownerId = user?.id ?? "preview";
   const cameraInput = useRef<HTMLInputElement>(null);
@@ -40,7 +42,7 @@ export default function PhotoAnalysisPage() {
     setError("");
     const { file, error: validationError } = preparePhotoFile(selectedFile);
     if (!file) {
-      setError(validationError ?? "Choose a supported wiring photo.");
+      setError(t(validationError ?? "Choose a supported wiring photo."));
       return;
     }
 
@@ -49,7 +51,7 @@ export default function PhotoAnalysisPage() {
       await storePendingPhoto(ownerId, file);
       router.push("/photo-analysis/review");
     } catch {
-      setError("The photo could not be prepared. Please select it again.");
+      setError(t("The photo could not be prepared. Please select it again."));
       setSelecting(false);
     }
   }
@@ -70,13 +72,13 @@ export default function PhotoAnalysisPage() {
   return (
     <>
       <PageHeading
-        title="AI Fault Detection"
-        description="Upload a clear wiring photo and let AI check it for visible electrical faults."
+        title={t("AI Fault Detection")}
+        description={t("Upload a clear wiring photo and let AI check it for visible electrical faults.")}
       />
 
       <Card className="generator-card">
         <strong style={{ display: "block", marginBottom: 14, fontSize: 12 }}>
-          Capture / Upload wiring photo
+          {t("Capture / Upload wiring photo")}
         </strong>
         <div
           className="upload-zone"
@@ -87,18 +89,18 @@ export default function PhotoAnalysisPage() {
           onDrop={onDrop}
         >
           <span className="upload-icon"><Camera size={28} /></span>
-          <h2>Drop your wiring photo here</h2>
-          <p>Drag &amp; drop or click to browse</p>
+          <h2>{t("Drop your wiring photo here")}</h2>
+          <p>{t("Drag & drop or click to browse")}</p>
           <div className="inline-actions">
             <Button variant="secondary" icon={Camera} disabled={selecting} onClick={() => cameraInput.current?.click()}>
-              Camera Upload
+              {t("Camera Upload")}
             </Button>
             <Button icon={ImagePlus} disabled={selecting} onClick={() => galleryInput.current?.click()}>
-              {selecting ? "Preparing…" : "Gallery Upload"}
+              {selecting ? t("Preparing…") : t("Gallery Upload")}
             </Button>
           </div>
           <small style={{ marginTop: 15, color: "var(--muted)", fontSize: 10 }}>
-            Accepted formats: JPG, PNG, WebP, HEIC, HEIF · Max 14MB
+            {t("Accepted formats: JPG, PNG, WebP, HEIC, HEIF · Max 14MB")}
           </small>
           {error && <span className="auth-message error" style={{ marginTop: 12 }}>{error}</span>}
           <input ref={cameraInput} hidden type="file" accept={PHOTO_INPUT_ACCEPT} capture="environment" onChange={onFileChange} />

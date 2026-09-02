@@ -23,6 +23,7 @@ import {
 } from "@/components/assessment/assessment-page-state";
 import { usePracticalAssessment } from "@/components/assessment/assessment-provider";
 import { AssessmentStepper } from "@/components/assessment/assessment-stepper";
+import { useLanguage } from "@/components/language-provider";
 import { Badge, Button, Card, LinkButton } from "@/components/ui";
 
 const MAX_VIDEO_BYTES = 100_000_000;
@@ -53,6 +54,7 @@ function validateVideo(file: File) {
 
 export default function UploadAssessmentPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const {
     assessment,
@@ -63,8 +65,6 @@ export default function UploadAssessmentPage() {
   } = usePracticalAssessment();
   const [video, setVideo] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [topic, setTopic] = useState("");
-  const [projectName, setProjectName] = useState("");
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
@@ -83,7 +83,7 @@ export default function UploadAssessmentPage() {
     if (!file) return;
     const validationError = validateVideo(file);
     if (validationError) {
-      setFormError(validationError);
+      setFormError(t(validationError));
       setVideo(null);
       if (inputRef.current) inputRef.current.value = "";
       return;
@@ -105,21 +105,14 @@ export default function UploadAssessmentPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const normalizedTopic = topic.trim();
-    const normalizedProjectName = projectName.trim();
-    if (!normalizedTopic || !normalizedProjectName) {
-      setFormError("Select a topic and enter your project name.");
+    if (!video) {
+      setFormError(t("Upload a practical-work video to continue."));
       return;
     }
-
     setSubmitting(true);
     setFormError("");
     try {
-      const response = await startAssessment({
-        topic: normalizedTopic,
-        projectName: normalizedProjectName,
-        video,
-      });
+      const response = await startAssessment({ video });
       router.push(
         response.assessment?.status === "completed"
           ? "/assessments/new/results"
@@ -129,7 +122,7 @@ export default function UploadAssessmentPage() {
       setFormError(
         caught instanceof Error
           ? caught.message
-          : "The assessment could not be started.",
+          : t("Your practical assessment could not be started."),
       );
     } finally {
       setSubmitting(false);
@@ -141,18 +134,14 @@ export default function UploadAssessmentPage() {
     setSubmitting(true);
     setFormError("");
     try {
-      await startAssessment({
-        topic: assessment.topic,
-        projectName: assessment.project_name,
-        video,
-      });
+      await startAssessment({ video });
       setVideo(null);
       router.push("/assessments/new/questions");
     } catch (caught) {
       setFormError(
         caught instanceof Error
           ? caught.message
-          : "The replacement video could not be analyzed.",
+          : t("The replacement work video could not be analyzed."),
       );
     } finally {
       setSubmitting(false);
@@ -169,91 +158,76 @@ export default function UploadAssessmentPage() {
     );
   }
 
-  if (assessment) {
-    const completed = assessment.status === "completed";
-    const videoLabel = assessment.video_status === "analyzed"
-      ? "Video analyzed"
-      : assessment.video_status === "failed"
-        ? "Video unavailable — manual answers enabled"
-        : "Manual assessment without video";
+  if (assessment?.status === "draft") {
+    const answersGenerated = assessment.video_status === "answers_generated";
+    const videoLabel = answersGenerated
+      ? "Video answers generated"
+      : "Assessment questions generated";
     return (
       <div>
-        {!completed && (
-          <input
-            ref={inputRef}
-            id="assessment-draft-video"
-            type="file"
-            accept={VIDEO_ACCEPT}
-            hidden
-            onChange={(event) => {
-              selectVideo(event.target.files?.[0]);
-              event.target.value = "";
-            }}
-          />
-        )}
+        <input
+          ref={inputRef}
+          id="assessment-draft-video"
+          type="file"
+          accept={VIDEO_ACCEPT}
+          hidden
+          onChange={(event) => {
+            selectVideo(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
         <AssessmentStepper
-          currentStep={completed ? 4 : 1}
+          currentStep={1}
           assessmentStatus={assessment.status}
+          videoStatus={assessment.video_status}
         />
         <div className="assessment-intro">
-          <h1>{completed ? "Assessment completed" : "Assessment in progress"}</h1>
-          <p>
-            {completed
-              ? "Your competency profile has already been saved. You can review the results at any time."
-              : "Continue the one-time assessment you already started."}
-          </p>
+          <h1>{t("Practical assessment in progress")}</h1>
+          <p>{t("Continue the assessment generated from your uploaded practical-work video.")}</p>
         </div>
         <Card className="assessment-resume-card">
-          <span className={`icon-box ${completed ? "icon-green" : "icon-blue"}`}>
-            {completed ? <CheckCircle2 size={22} /> : <FileVideo size={22} />}
+          <span className="icon-box icon-blue">
+            <FileVideo size={22} />
           </span>
           <div>
             <div className="chips">
-              <Badge>{assessment.topic}</Badge>
-              <Badge tone={assessment.video_status === "failed" ? "amber" : "green"}>
-                {videoLabel}
-              </Badge>
+              <Badge tone="green">{t(videoLabel)}</Badge>
             </div>
-            <h2>{assessment.project_name}</h2>
+            <h2>{t("Your work assessment")}</h2>
             <p>
-              {completed && assessment.overall_score !== null
-                ? `Overall competency score: ${assessment.overall_score}% · Grade ${assessment.grade}`
-                : "Your fixed questions and any safe AI observations are ready."}
+              {answersGenerated
+                ? t("Gemini's video-based answers are ready for your review.")
+                : t("Ten work-specific questions are ready for review.")}
             </p>
           </div>
           <div className="assessment-resume-actions">
             <LinkButton
-              href={completed ? "/assessments/new/results" : "/assessments/new/questions"}
+              href={answersGenerated
+                ? "/assessments/new/answers"
+                : "/assessments/new/questions"}
               icon={ArrowRight}
             >
-              {completed ? "View Results" : "Continue Assessment"}
+              {t("Continue Assessment")}
             </LinkButton>
-            {!completed && (
-              <Button
-                type="button"
-                variant="secondary"
-                icon={Upload}
-                disabled={submitting}
-                onClick={() => inputRef.current?.click()}
-              >
-                {assessment.video_status === "failed"
-                  ? "Retry Video"
-                  : assessment.video_status === "not_provided"
-                    ? "Add Video"
-                    : "Replace Video"}
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="secondary"
+              icon={Upload}
+              disabled={submitting}
+              onClick={() => inputRef.current?.click()}
+            >
+              {t("Replace Video")}
+            </Button>
           </div>
         </Card>
-        {!completed && video && (
+        {video && (
           <Card className="assessment-draft-video-card">
             <div>
               <Badge tone="green"><FileVideo size={12} /> {video.name}</Badge>
               <span>{formatBytes(video.size)}</span>
             </div>
             <p>
-              Analyzing this file replaces the draft&apos;s previous video
-              observations but preserves answers you entered yourself.
+              {t("Submitting this file replaces the draft's generated questions and answers with a new assessment based on this video.")}
             </p>
             <div className="inline-actions">
               <Button
@@ -263,7 +237,7 @@ export default function UploadAssessmentPage() {
                 disabled={submitting}
                 onClick={clearVideo}
               >
-                Remove
+                {t("Remove")}
               </Button>
               <Button
                 type="button"
@@ -271,12 +245,12 @@ export default function UploadAssessmentPage() {
                 disabled={submitting}
                 onClick={() => void analyzeDraftVideo()}
               >
-                {submitting ? "Analyzing Video…" : "Analyze & Continue"}
+                {submitting ? t("Generating Questions…") : t("Replace & Continue")}
               </Button>
             </div>
           </Card>
         )}
-        {!completed && formError && (
+        {formError && (
           <div className="auth-message error">{formError}</div>
         )}
       </div>
@@ -285,11 +259,15 @@ export default function UploadAssessmentPage() {
 
   return (
     <div>
-      <AssessmentStepper currentStep={1} assessmentStatus={null} />
+      <AssessmentStepper
+        currentStep={1}
+        assessmentStatus={null}
+        videoStatus={null}
+      />
       <div className="assessment-intro">
-        <h1>Video Practical Assessment</h1>
+        <h1>{t("Video Practical Assessment")}</h1>
         <p>
-          Optionally upload a short practical-work video, then complete ten fixed questions.
+          {t("Upload a video of your practical electrical work. Gemini will create ten questions tailored to the work it can observe.")}
         </p>
       </div>
 
@@ -312,7 +290,7 @@ export default function UploadAssessmentPage() {
               src={videoUrl}
               controls
               playsInline
-              aria-label={`Preview of ${video.name}`}
+              aria-label={`${t("Preview")} ${video.name}`}
               className="assessment-video-player"
             />
             <div className="assessment-file-row">
@@ -325,7 +303,7 @@ export default function UploadAssessmentPage() {
                 disabled={submitting}
                 onClick={clearVideo}
               >
-                Remove
+                {t("Remove")}
               </Button>
             </div>
           </Card>
@@ -340,64 +318,28 @@ export default function UploadAssessmentPage() {
             onDrop={dropVideo}
           >
             <span className="upload-icon"><Upload size={25} /></span>
-            <h2>Upload a practical work video <small>Optional</small></h2>
-            <p>MP4, MOV, or WebM · maximum 100 MB</p>
-            <span className="button button-secondary">Choose Video</span>
-            <small className="assessment-skip-note">
-              No video? Continue below and answer all questions manually.
-            </small>
+            <h2>{t("Upload your practical-work video")} <small>{t("Required")}</small></h2>
+            <p>{t("MP4, MOV, or WebM · maximum 100 MB")}</p>
+            <span className="button button-secondary">{t("Choose Video")}</span>
           </button>
         )}
-
-        <div className="assessment-form-grid">
-          <label className="field">
-            <span>Topic / Category</span>
-            <select
-              required
-              value={topic}
-              disabled={submitting}
-              onChange={(event) => setTopic(event.target.value)}
-            >
-              <option value="">Select a topic</option>
-              <option>House Wiring</option>
-              <option>Motor Starter</option>
-              <option>Three Phase</option>
-              <option>Lighting Circuit</option>
-              <option>Electrical Installation</option>
-              <option>Testing and Verification</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Project Name</span>
-            <input
-              required
-              maxLength={160}
-              value={projectName}
-              disabled={submitting}
-              onChange={(event) => setProjectName(event.target.value)}
-              placeholder="e.g., Final Lab Project - House Wiring"
-            />
-          </label>
-        </div>
 
         <div className="assessment-privacy-note">
           <ShieldCheck size={17} />
           <p>
-            Your video is temporarily sent to Gemini for analysis. The backend does not store the raw video in Supabase and asks Gemini to delete its temporary copy afterward; only metadata, observations, answers, and results are retained.
+            {t("Your video is stored in a private Supabase bucket so you can complete each stage, and is sent to Gemini through the authenticated backend for analysis. It is never exposed through a public video URL.")}
           </p>
         </div>
 
         {formError && <div className="auth-message error">{formError}</div>}
         <div className="wizard-actions assessment-first-actions">
           <span className="assessment-manual-note">
-            {video ? "Your video will be analyzed before Step 2." : "You are continuing without a video."}
+            {video
+              ? t("Gemini will generate ten assessment questions from this video.")
+              : t("A practical-work video is required to begin.")}
           </span>
-          <Button type="submit" icon={ArrowRight} disabled={submitting}>
-            {submitting
-              ? video
-                ? "Analyzing Video…"
-                : "Starting Assessment…"
-              : "Next: Review Questions"}
+          <Button type="submit" icon={ArrowRight} disabled={submitting || !video}>
+            {submitting ? t("Generating Questions…") : t("Next: Review Questions")}
           </Button>
         </div>
       </form>

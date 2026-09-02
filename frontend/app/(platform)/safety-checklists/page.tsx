@@ -17,6 +17,7 @@ import {
   LinkButton,
   PageHeading,
 } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import {
   frontendApi,
   type SafetyChecklistDocument,
@@ -37,6 +38,7 @@ function triggerDownload(url: string, filename: string) {
 }
 
 export default function SafetyChecklistsPage() {
+  const { locale, t } = useLanguage();
   const [checklists, setChecklists] = useState<SafetyChecklistDocument[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All Categories");
@@ -56,7 +58,7 @@ export default function SafetyChecklistsPage() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : "Safety checklists could not be loaded.",
+              : t("Safety checklists could not be loaded."),
           );
         }
       })
@@ -66,7 +68,7 @@ export default function SafetyChecklistsPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [t]);
 
   const categories = useMemo(
     () => [...new Set(checklists.map((checklist) => checklist.category))],
@@ -96,7 +98,7 @@ export default function SafetyChecklistsPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "The PDF could not be downloaded.",
+          : t("The PDF could not be downloaded."),
       );
     } finally {
       setDownloadingId(null);
@@ -106,11 +108,11 @@ export default function SafetyChecklistsPage() {
   return (
     <>
       <PageHeading
-        title="Safety Checklist"
-        description="Open or download the latest safety-checklist PDFs provided by ElectroMentor."
+        title={t("Safety Checklist")}
+        description={t("Open or download the latest safety-checklist PDFs provided by ElectroMentor.")}
         action={
           <LinkButton href="/safety-checklists/generate" icon={Sparkles}>
-            Generate with AI
+            {t("Generate with AI")}
           </LinkButton>
         }
       />
@@ -121,17 +123,17 @@ export default function SafetyChecklistsPage() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search checklists…"
-            aria-label="Search checklists"
+            placeholder={t("Search checklists…")}
+            aria-label={t("Search checklists…")}
           />
         </label>
         <select
           className="select-field"
           value={category}
           onChange={(event) => setCategory(event.target.value)}
-          aria-label="Filter by category"
+          aria-label={t("Filter by category")}
         >
-          <option>All Categories</option>
+          <option value="All Categories">{t("All Categories")}</option>
           {categories.map((item) => <option key={item}>{item}</option>)}
         </select>
       </div>
@@ -140,7 +142,7 @@ export default function SafetyChecklistsPage() {
 
       {loading ? (
         <div className="full-loader" style={{ minHeight: 300, background: "transparent" }}>
-          <span className="spinner" /> Loading safety checklists…
+          <span className="spinner" /> {t("Loading safety checklists…")}
         </div>
       ) : visibleChecklists.length ? (
         <div className="checklist-grid">
@@ -153,8 +155,8 @@ export default function SafetyChecklistsPage() {
                 <span>
                   <FileText size={13} />
                   {checklist.page_count
-                    ? `${checklist.page_count} pages`
-                    : "PDF document"}
+                    ? t("{{count}} pages", { count: new Intl.NumberFormat(locale).format(checklist.page_count) })
+                    : t("PDF document")}
                 </span>
                 <span>{formatFileSize(checklist.file_size_bytes)}</span>
               </div>
@@ -164,7 +166,7 @@ export default function SafetyChecklistsPage() {
                   variant="secondary"
                   icon={ArrowRight}
                 >
-                  Open PDF
+                  {t("Open PDF")}
                 </LinkButton>
                 <Button
                   variant="ghost"
@@ -172,7 +174,7 @@ export default function SafetyChecklistsPage() {
                   disabled={downloadingId === checklist.id}
                   onClick={() => void downloadChecklist(checklist)}
                 >
-                  {downloadingId === checklist.id ? "Downloading…" : "Download"}
+                  {downloadingId === checklist.id ? t("Downloading…") : t("Download")}
                 </Button>
               </div>
             </Card>
@@ -182,11 +184,11 @@ export default function SafetyChecklistsPage() {
         <Card>
           <div className="empty-state">
             <span className="empty-icon"><ShieldCheck size={28} /></span>
-            <h2>No checklists found</h2>
+            <h2>{t("No checklists found")}</h2>
             <p>
               {checklists.length
-                ? "Try a different search term or category."
-                : "Add PDF files to backend/data/safety_checklist and reload this page."}
+                ? t("Try a different search term or category.")
+                : t("Add PDF files to backend/data/safety_checklist and reload this page.")}
             </p>
           </div>
         </Card>

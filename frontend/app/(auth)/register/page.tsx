@@ -7,6 +7,7 @@ import { type FormEvent, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { Brand } from "@/components/brand";
+import { useLanguage } from "@/components/language-provider";
 import { Button } from "@/components/ui";
 import {
   getSupabaseBrowserClient,
@@ -15,6 +16,7 @@ import {
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { language, setLanguage, t } = useLanguage();
   const { configured, enterPreviewMode } = useAuth();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -30,12 +32,12 @@ export default function RegisterPage() {
     event.preventDefault();
     setError(null);
     setSuccess(null);
-    if (password.length < 8) return setError("Password must be at least 8 characters.");
-    if (password !== confirmation) return setError("The passwords do not match.");
-    if (!accepted) return setError("Please accept the terms to continue.");
+    if (password.length < 8) return setError(t("Password must be at least 8 characters."));
+    if (password !== confirmation) return setError(t("The passwords do not match."));
+    if (!accepted) return setError(t("Please accept the terms to continue."));
 
     const supabase = getSupabaseBrowserClient();
-    if (!supabase) return setError("Supabase is not configured yet. Use preview mode for now.");
+    if (!supabase) return setError(t("Supabase is not configured yet. Use preview mode for now."));
 
     setSubmitting(true);
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || window.location.origin;
@@ -54,7 +56,7 @@ export default function RegisterPage() {
       router.refresh();
       return;
     }
-    setSuccess("Account created. Check your email to confirm your address, then sign in.");
+    setSuccess(t("Account created. Check your email to confirm your address, then sign in."));
   }
 
   function openPreview() {
@@ -67,36 +69,37 @@ export default function RegisterPage() {
       <section className="auth-showcase">
         <Brand />
         <div className="auth-copy">
-          <h1>Build safer electrical skills, one task at a time.</h1>
-          <p>Create your trainee account to save progress, review assessments, and get AI-supported guidance.</p>
+          <h1>{t("Build safer electrical skills, one task at a time.")}</h1>
+          <p>{t("Create your trainee account to save progress, review assessments, and get AI-supported guidance.")}</p>
         </div>
-        <div className="auth-feature-list"><span>Guided practice</span><span>Progress tracking</span><span>Bangla-ready learning</span></div>
+        <div className="auth-feature-list"><span>{t("Guided practice")}</span><span>{t("Progress tracking")}</span><span>{t("Bangla-ready learning")}</span></div>
       </section>
       <section className="auth-form-side">
         <div className="auth-card">
-          <h2>Create your account</h2>
-          <p>Start your ElectroMentor learning journey.</p>
+          <div className="language-switch auth-language-switch" aria-label={t("Language selection")}>{(["en", "bn"] as const).map((item) => <button type="button" key={item} className={language === item ? "active" : ""} onClick={() => setLanguage(item)}>{item.toUpperCase()}</button>)}</div>
+          <h2>{t("Create your account")}</h2>
+          <p>{t("Start your ElectroMentor learning journey.")}</p>
           <form className="auth-form" onSubmit={handleSubmit}>
-            <label className="field"><span>Full name</span><input autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required placeholder="Your full name" /></label>
-            <label className="field"><span>Email address</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="student@example.com" /></label>
+            <label className="field"><span>{t("Full name")}</span><input autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required placeholder={t("Your full name")} /></label>
+            <label className="field"><span>{t("Email address")}</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="student@example.com" /></label>
             <label className="field">
-              <span>Password</span>
+              <span>{t("Password")}</span>
               <span className="password-wrap">
-                <input type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required placeholder="At least 8 characters" />
-                <button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+                <input type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required placeholder={t("At least 8 characters")} />
+                <button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? t("Hide password") : t("Show password")}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
               </span>
             </label>
-            <label className="field"><span>Confirm password</span><input type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required placeholder="Repeat your password" /></label>
-            <label className="auth-options"><span><input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} /> I agree to the terms and safety policy.</span></label>
+            <label className="field"><span>{t("Confirm password")}</span><input type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required placeholder={t("Repeat your password")} /></label>
+            <label className="auth-options"><span><input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} /> {t("I agree to the terms and safety policy.")}</span></label>
             {error && <div className="auth-message error" role="alert">{error}</div>}
             {success && <div className="auth-message success" role="status">{success}</div>}
-            <Button type="submit" icon={UserPlus} disabled={submitting || !fullName || !email || !password || !confirmation}>{submitting ? "Creating account…" : "Create account"}</Button>
+            <Button type="submit" icon={UserPlus} disabled={submitting || !fullName || !email || !password || !confirmation}>{submitting ? t("Creating account…") : t("Create account")}</Button>
           </form>
-          <p className="auth-switch">Already have an account? <Link href="/login">Sign in</Link></p>
+          <p className="auth-switch">{t("Already have an account?")} <Link href="/login">{t("Sign in")}</Link></p>
           {isPreviewModeAllowed && (
             <div className="preview-note">
-              <p>{configured ? "Mock API mode is active." : "Supabase credentials have not been added yet."}</p>
-              <Button type="button" variant="secondary" icon={ShieldCheck} onClick={openPreview}>Open safe preview</Button>
+              <p>{configured ? t("Mock API mode is active.") : t("Supabase credentials have not been added yet.")}</p>
+              <Button type="button" variant="secondary" icon={ShieldCheck} onClick={openPreview}>{t("Open safe preview")}</Button>
             </div>
           )}
         </div>

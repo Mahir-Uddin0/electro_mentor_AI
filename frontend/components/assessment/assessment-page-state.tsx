@@ -1,11 +1,15 @@
+"use client";
+
 import { AlertCircle, ClipboardList } from "lucide-react";
 
+import { useLanguage } from "@/components/language-provider";
 import { Button, Card, LinkButton } from "@/components/ui";
 
-export function AssessmentLoading({ label = "Loading your assessment…" }) {
+export function AssessmentLoading({ label }: { label?: string }) {
+  const { t } = useLanguage();
   return (
     <div className="full-loader assessment-loader">
-      <span className="spinner" /> {label}
+      <span className="spinner" /> {t(label ?? "Loading your practical assessment…")}
     </div>
   );
 }
@@ -17,31 +21,33 @@ export function AssessmentLoadError({
   message: string;
   retry: () => void;
 }) {
+  const { t } = useLanguage();
   return (
     <Card className="assessment-state-card">
       <span className="icon-box icon-amber"><AlertCircle size={20} /></span>
       <div>
-        <h1>Couldn&apos;t load your assessment</h1>
+        <h1>{t("Couldn't load your practical assessment")}</h1>
         <p>{message}</p>
       </div>
-      <Button variant="secondary" onClick={retry}>Try Again</Button>
+      <Button variant="secondary" onClick={retry}>{t("Try Again")}</Button>
     </Card>
   );
 }
 
 export function AssessmentMissing({
-  description = "Start the practical assessment before opening this step.",
+  description = "Upload a practical-work video before opening this step.",
 }: {
   description?: string;
 }) {
+  const { t } = useLanguage();
   return (
     <Card className="assessment-state-card">
       <span className="icon-box icon-blue"><ClipboardList size={20} /></span>
       <div>
-        <h1>No assessment started</h1>
-        <p>{description}</p>
+        <h1>{t("No practical assessment started")}</h1>
+        <p>{t(description)}</p>
       </div>
-      <LinkButton href="/assessments/new/upload">Start Assessment</LinkButton>
+      <LinkButton href="/assessments/new/upload">{t("Start Assessment")}</LinkButton>
     </Card>
   );
 }

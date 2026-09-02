@@ -12,6 +12,7 @@ import {
   LinkButton,
   PageHeading,
 } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import { frontendApi, type GuideDocument } from "@/lib/api/client";
 
 function downloadUrl(url: string, filename: string) {
@@ -25,6 +26,7 @@ function downloadUrl(url: string, filename: string) {
 
 export default function GuidePdfPage() {
   const params = useParams<{ id: string }>();
+  const { locale, t } = useLanguage();
   const [guide, setGuide] = useState<GuideDocument | null>(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ export default function GuidePdfPage() {
       try {
         const { documents } = await frontendApi.listGuides();
         const selected = documents.find((item) => item.id === params.id);
-        if (!selected) throw new Error("Guide not found.");
+        if (!selected) throw new Error(t("Guide not found."));
         const blob = await frontendApi.getGuideFile(selected.id);
         objectUrl = URL.createObjectURL(blob);
         if (!active) {
@@ -51,7 +53,7 @@ export default function GuidePdfPage() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : "The guide PDF could not be opened.",
+              : t("The guide PDF could not be opened."),
           );
         }
       } finally {
@@ -62,12 +64,12 @@ export default function GuidePdfPage() {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [params.id]);
+  }, [params.id, t]);
 
   if (loading) {
     return (
       <div className="full-loader" style={{ minHeight: 420, background: "transparent" }}>
-        <span className="spinner" /> Opening guide PDF…
+        <span className="spinner" /> {t("Opening guide PDF…")}
       </div>
     );
   }
@@ -75,13 +77,13 @@ export default function GuidePdfPage() {
   if (!guide || !pdfUrl) {
     return (
       <>
-        <PageHeading title="Wiring & Circuit Guide Library" />
+        <PageHeading title={t("Wiring & Circuit Guide Library")} />
         <Card className="empty-state">
           <span className="empty-icon"><FileWarning size={28} /></span>
-          <h2>Guide unavailable</h2>
-          <p>{error || "This guide could not be found."}</p>
+          <h2>{t("Guide unavailable")}</h2>
+          <p>{error || t("This guide could not be found.")}</p>
           <LinkButton href="/guides" icon={RotateCcw}>
-            Back to Guide Library
+            {t("Back to Guide Library")}
           </LinkButton>
         </Card>
       </>
@@ -102,7 +104,7 @@ export default function GuidePdfPage() {
           fontWeight: 700,
         }}
       >
-        <ArrowLeft size={14} /> Back to Guide Library
+        <ArrowLeft size={14} /> {t("Back to Guide Library")}
       </Link>
 
       <PageHeading
@@ -111,14 +113,14 @@ export default function GuidePdfPage() {
         description={guide.description}
         action={
           <Button icon={Download} onClick={() => downloadUrl(pdfUrl, guide.filename)}>
-            Download PDF
+            {t("Download PDF")}
           </Button>
         }
       />
 
       <div className="chips" style={{ marginBottom: 14 }}>
-        <Badge tone="blue"><BookOpen size={12} /> PDF guide</Badge>
-        {guide.page_count && <Badge tone="gray">{guide.page_count} pages</Badge>}
+        <Badge tone="blue"><BookOpen size={12} /> {t("PDF guide")}</Badge>
+        {guide.page_count && <Badge tone="gray">{t("{{count}} pages", { count: new Intl.NumberFormat(locale).format(guide.page_count) })}</Badge>}
       </div>
 
       <Card className="pdf-viewer-card">

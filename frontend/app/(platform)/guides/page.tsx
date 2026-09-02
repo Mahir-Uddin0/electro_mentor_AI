@@ -17,6 +17,7 @@ import {
   LinkButton,
   PageHeading,
 } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import { frontendApi, type GuideDocument } from "@/lib/api/client";
 
 const coverStyles = [
@@ -32,11 +33,11 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatDate(value: string) {
+function formatDate(value: string, locale: string, recently: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? "Recently updated"
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+    ? recently
+    : new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
 function triggerDownload(url: string, filename: string) {
@@ -49,6 +50,7 @@ function triggerDownload(url: string, filename: string) {
 }
 
 export default function GuidesPage() {
+  const { locale, t } = useLanguage();
   const [guides, setGuides] = useState<GuideDocument[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All Categories");
@@ -69,7 +71,7 @@ export default function GuidesPage() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : "The guide library could not be loaded.",
+              : t("The guide library could not be loaded."),
           );
         }
       })
@@ -79,7 +81,7 @@ export default function GuidesPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [t]);
 
   const categories = useMemo(
     () => [...new Set(guides.map((guide) => guide.category))],
@@ -118,7 +120,7 @@ export default function GuidesPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "The guide PDF could not be downloaded.",
+          : t("The guide PDF could not be downloaded."),
       );
     } finally {
       setDownloadingId(null);
@@ -128,8 +130,8 @@ export default function GuidesPage() {
   return (
     <>
       <PageHeading
-        title="Wiring & Circuit Guide Library"
-        description={`Browse ${guides.length} PDF electrical guides from the backend library.`}
+        title={t("Wiring & Circuit Guide Library")}
+        description={t("Browse {{count}} PDF electrical guides from the backend library.", { count: new Intl.NumberFormat(locale).format(guides.length) })}
       />
 
       <div className="filters">
@@ -138,28 +140,28 @@ export default function GuidesPage() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search guides…"
-            aria-label="Search guides"
+            placeholder={t("Search guides…")}
+            aria-label={t("Search guides…")}
           />
         </label>
         <select
           className="select-field"
           value={category}
           onChange={(event) => setCategory(event.target.value)}
-          aria-label="Category"
+          aria-label={t("Category")}
         >
-          <option>All Categories</option>
+          <option value="All Categories">{t("All Categories")}</option>
           {categories.map((item) => <option key={item}>{item}</option>)}
         </select>
         <select
           className="select-field"
           value={sort}
           onChange={(event) => setSort(event.target.value)}
-          aria-label="Sort guides"
+          aria-label={t("Sort guides")}
         >
-          <option>Title A–Z</option>
-          <option>Newest</option>
-          <option>Most Pages</option>
+          <option value="Title A–Z">{t("Title A–Z")}</option>
+          <option value="Newest">{t("Newest")}</option>
+          <option value="Most Pages">{t("Most Pages")}</option>
         </select>
       </div>
 
@@ -167,7 +169,7 @@ export default function GuidesPage() {
 
       {loading ? (
         <div className="full-loader" style={{ minHeight: 320, background: "transparent" }}>
-          <span className="spinner" /> Loading guide library…
+          <span className="spinner" /> {t("Loading guide library…")}
         </div>
       ) : visibleGuides.length ? (
         <div className="content-grid">
@@ -184,10 +186,10 @@ export default function GuidesPage() {
                 <div className="card-meta">
                   <span>
                     <FileText size={12} />
-                    {guide.page_count ? `${guide.page_count} pages` : "PDF"}
+                    {guide.page_count ? t("{{count}} pages", { count: new Intl.NumberFormat(locale).format(guide.page_count) }) : "PDF"}
                   </span>
                   <span>{formatFileSize(guide.file_size_bytes)}</span>
-                  <span><CalendarDays size={12} /> {formatDate(guide.updated_at)}</span>
+                  <span><CalendarDays size={12} /> {formatDate(guide.updated_at, locale, t("Recently updated"))}</span>
                 </div>
                 <div className="guide-card-actions">
                   <LinkButton
@@ -195,7 +197,7 @@ export default function GuidesPage() {
                     variant="secondary"
                     icon={ArrowRight}
                   >
-                    Open PDF
+                    {t("Open PDF")}
                   </LinkButton>
                   <Button
                     variant="ghost"
@@ -203,7 +205,7 @@ export default function GuidesPage() {
                     disabled={downloadingId === guide.id}
                     onClick={() => void downloadGuide(guide)}
                   >
-                    {downloadingId === guide.id ? "Downloading…" : "Download"}
+                    {downloadingId === guide.id ? t("Downloading…") : t("Download")}
                   </Button>
                 </div>
               </div>
@@ -213,11 +215,11 @@ export default function GuidesPage() {
       ) : (
         <Card className="empty-state">
           <span className="empty-icon"><BookOpen size={28} /></span>
-          <h2>No guides found</h2>
+          <h2>{t("No guides found")}</h2>
           <p>
             {guides.length
-              ? "Try a different search term or category."
-              : "Add PDF files to backend/data/wiring_circuit_guide_library and reload this page."}
+              ? t("Try a different search term or category.")
+              : t("Add PDF files to backend/data/wiring_circuit_guide_library and reload this page.")}
           </p>
         </Card>
       )}

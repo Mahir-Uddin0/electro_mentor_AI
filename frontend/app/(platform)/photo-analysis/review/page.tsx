@@ -11,6 +11,7 @@ import {
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useLanguage } from "@/components/language-provider";
 import { RecentPhotoAnalyses } from "@/components/photo-analysis/recent-analyses";
 import { Button, Card, PageHeading } from "@/components/ui";
 import { frontendApi } from "@/lib/api/client";
@@ -41,6 +42,7 @@ function formatBytes(bytes: number) {
 
 export default function PhotoReviewPage() {
   const router = useRouter();
+  const { t } = useLanguage();
   const { user } = useAuth();
   const ownerId = user?.id ?? "preview";
   const inputRef = useRef<HTMLInputElement>(null);
@@ -81,7 +83,7 @@ export default function PhotoReviewPage() {
     setError("");
     const { file, error: validationError } = preparePhotoFile(selectedFile);
     if (!file) {
-      setError(validationError ?? "Choose a supported wiring photo.");
+      setError(t(validationError ?? "Choose a supported wiring photo."));
       return;
     }
     try {
@@ -94,7 +96,7 @@ export default function PhotoReviewPage() {
         type: file.type,
       });
     } catch {
-      setError("The photo could not be prepared. Please select it again.");
+      setError(t("The photo could not be prepared. Please select it again."));
     }
   }
 
@@ -111,7 +113,7 @@ export default function PhotoReviewPage() {
 
   async function analyze() {
     if (!photo) {
-      setError("Select a wiring photo before starting the analysis.");
+      setError(t("Select a wiring photo before starting the analysis."));
       return;
     }
     setError("");
@@ -122,7 +124,7 @@ export default function PhotoReviewPage() {
       await clearPendingPhoto(ownerId);
       router.push(`/photo-analysis/results/${result.analysis_id}`);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Analysis could not be started.");
+      setError(requestError instanceof Error ? requestError.message : t("Analysis could not be started."));
     } finally {
       setLoading(false);
     }
@@ -131,9 +133,9 @@ export default function PhotoReviewPage() {
   return (
     <>
       <PageHeading
-        title="Review wiring photo"
-        description="Confirm that the important wiring details are visible before analysis."
-        action={<Button variant="secondary" icon={ImagePlus} disabled={loading} onClick={() => inputRef.current?.click()}>Replace Photo</Button>}
+        title={t("Review wiring photo")}
+        description={t("Confirm that the important wiring details are visible before analysis.")}
+        action={<Button variant="secondary" icon={ImagePlus} disabled={loading} onClick={() => inputRef.current?.click()}>{t("Replace Photo")}</Button>}
       />
 
       <Card className="analysis-layout">
@@ -141,12 +143,12 @@ export default function PhotoReviewPage() {
           {photo ? (
             <img
               src={photo.url}
-              alt="Selected wiring preview"
+              alt={t("Selected wiring preview")}
               style={{ width: "100%", height: "100%", maxHeight: 470, objectFit: "contain", borderRadius: 10 }}
             />
           ) : restoringPhoto ? (
             <div className="full-loader" style={{ minHeight: 300, background: "transparent" }}>
-              <span className="spinner" /> Loading selected photo…
+              <span className="spinner" /> {t("Loading selected photo…")}
             </div>
           ) : (
             <button
@@ -156,20 +158,20 @@ export default function PhotoReviewPage() {
               onClick={() => inputRef.current?.click()}
             >
               <span className="upload-icon"><Camera size={27} /></span>
-              <h2>Select a wiring photo</h2>
-              <p>JPG, PNG, WebP, HEIC, HEIF · Max 14MB</p>
+              <h2>{t("Select a wiring photo")}</h2>
+              <p>{t("JPG, PNG, WebP, HEIC, HEIF · Max 14MB")}</p>
             </button>
           )}
         </div>
 
         <div className="file-summary">
-          <h2>Photo details</h2>
-          <div className="key-value"><span>File</span><strong>{photo?.name ?? "Not selected"}</strong></div>
-          <div className="key-value"><span>Size</span><strong>{photo ? formatBytes(photo.size) : "—"}</strong></div>
-          <div className="key-value"><span>Type</span><strong>{photo?.type ?? "—"}</strong></div>
+          <h2>{t("Photo details")}</h2>
+          <div className="key-value"><span>{t("File")}</span><strong>{photo?.name ?? t("Not selected")}</strong></div>
+          <div className="key-value"><span>{t("Size")}</span><strong>{photo ? formatBytes(photo.size) : "—"}</strong></div>
+          <div className="key-value"><span>{t("Type")}</span><strong>{photo?.type ?? "—"}</strong></div>
           <div className="alert alert-amber">
             <FileImage size={18} />
-            <div><strong>Photo tip</strong><p>Use good lighting and keep all terminals and wire colors in focus.</p></div>
+            <div><strong>{t("Photo tip")}</strong><p>{t("Use good lighting and keep all terminals and wire colors in focus.")}</p></div>
           </div>
         </div>
       </Card>
@@ -178,9 +180,9 @@ export default function PhotoReviewPage() {
         <Card className="generator-card">
           <div className="inline-actions" style={{ justifyContent: "flex-start" }}>
             <Button icon={ScanLine} disabled={loading || restoringPhoto || !photo} onClick={analyze}>
-              {loading ? "Analyzing…" : "Analyze Wiring"}
+              {loading ? t("Analyzing…") : t("Analyze Wiring")}
             </Button>
-            {photo && <Button variant="ghost" icon={Trash2} disabled={loading} onClick={removePhoto}>Remove</Button>}
+            {photo && <Button variant="ghost" icon={Trash2} disabled={loading} onClick={removePhoto}>{t("Remove")}</Button>}
           </div>
           {error && <div className="auth-message error" style={{ marginTop: 12 }}>{error}</div>}
         </Card>

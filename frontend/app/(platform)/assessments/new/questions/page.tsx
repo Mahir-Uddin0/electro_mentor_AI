@@ -5,12 +5,12 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
-  CheckCircle2,
   ClipboardList,
-  Info,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
+import { practicalAssessmentCompetencyLabels } from "@/components/assessment/assessment-competencies";
+import { useLanguage } from "@/components/language-provider";
 import {
   AssessmentLoadError,
   AssessmentLoading,
@@ -18,18 +18,21 @@ import {
 } from "@/components/assessment/assessment-page-state";
 import { usePracticalAssessment } from "@/components/assessment/assessment-provider";
 import { AssessmentStepper } from "@/components/assessment/assessment-stepper";
-import { Badge, Card, LinkButton, PageHeading } from "@/components/ui";
+import { Badge, Button, Card, LinkButton, PageHeading } from "@/components/ui";
 
 export default function AssessmentQuestionsPage() {
   const router = useRouter();
+  const { locale, t } = useLanguage();
   const {
     assessment,
     questions,
-    checklistDefinitions,
     loading,
     error,
     refresh,
+    generateAnswers,
   } = usePracticalAssessment();
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState("");
 
   useEffect(() => {
     if (!loading && assessment?.status === "completed") {
@@ -50,80 +53,89 @@ export default function AssessmentQuestionsPage() {
   }
   if (!assessment) return <AssessmentMissing />;
 
-  const competencyLabels = new Map(
-    checklistDefinitions.map((section) => [section.competency, section.label]),
-  );
-  const aiSuggestionCount = assessment.answers.filter(
-    (answer) => Boolean(answer.ai_answer),
-  ).length;
+  const hasTenQuestions = questions.length === 10;
+  const assessmentId = assessment.id;
+  const answersAlreadyGenerated = assessment.video_status === "answers_generated";
+
+  async function continueToAnswers() {
+    if (!hasTenQuestions) {
+      setGenerationError(
+        t("This assessment does not contain the required ten questions. Replace the video and try again."),
+      );
+      return;
+    }
+    if (answersAlreadyGenerated) {
+      router.push("/assessments/new/answers");
+      return;
+    }
+    setGenerating(true);
+    setGenerationError("");
+    try {
+      await generateAnswers(assessmentId);
+      router.push("/assessments/new/answers");
+    } catch (caught) {
+      setGenerationError(
+        caught instanceof Error
+          ? caught.message
+          : t("Gemini could not generate answers from your work video."),
+      );
+      setGenerating(false);
+    }
+  }
 
   return (
     <div>
-      <AssessmentStepper currentStep={2} assessmentStatus={assessment.status} />
+      <AssessmentStepper
+        currentStep={2}
+        assessmentStatus={assessment.status}
+        videoStatus={assessment.video_status}
+      />
       <PageHeading
-        title="Assessment Questions"
-        description="Step 2 of 6 — Review the ten fixed questions used for every practical assessment."
+        title={t("Assessment Questions")}
+        description={t("Step 2 of 6 — Review ten questions Gemini generated specifically from your practical-work video.")}
       />
 
       <Card className="assessment-question-summary">
         <span className="icon-box icon-blue"><ClipboardList size={19} /></span>
         <div>
-          <strong>{questions.length} fixed questions</strong>
+          <strong>{t("{{count}} AI-generated questions", { count: new Intl.NumberFormat(locale).format(questions.length) })}</strong>
           <p>
-            The questions cannot be added, removed, or AI-generated. They consistently measure the same six competency areas.
+            {t("The questions cover observable decisions, safety, tool use, technique, testing, and documentation relevant to the work shown.")}
           </p>
         </div>
-        <Badge tone="purple">
-          {questions.reduce((total, question) => total + question.points, 0)} total points
-        </Badge>
+        <Badge tone="purple">{t("Work assessment")}</Badge>
       </Card>
 
-      {assessment.video_status === "analyzed" ? (
-        <div className="alert alert-green assessment-question-alert">
-          <Bot size={19} />
-          <div>
-            <strong>Video review complete</strong>
-            <p>
-              Gemini found evidence for {aiSuggestionCount} of {questions.length} answers. Unverified answers remain empty for you to complete.
-            </p>
-          </div>
+      <div className="alert alert-green assessment-question-alert">
+        <Bot size={19} />
+        <div>
+          <strong>{t("Question generation complete")}</strong>
+          <p>
+            {t("Continue when you are ready. Gemini will review the video again and fill only answers that the video supports.")}
+          </p>
         </div>
-      ) : assessment.video_status === "failed" ? (
-        <div className="alert alert-amber assessment-question-alert">
-          <Info size={19} />
-          <div>
-            <strong>Continue with manual answers</strong>
-            <p>The optional video could not be analyzed, but you can still complete the assessment normally.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="alert alert-amber assessment-question-alert">
-          <Info size={19} />
-          <div>
-            <strong>Manual assessment</strong>
-            <p>No video was supplied, so all ten answers will be completed by you.</p>
-          </div>
+      </div>
+
+      {generationError && (
+        <div className="auth-message error assessment-form-message">
+          {generationError}
         </div>
       )}
 
       <div className="question-list">
         {questions.map((question, index) => {
-          const suggested = assessment.answers.some(
-            (answer) => answer.question_id === question.id && Boolean(answer.ai_answer),
-          );
           return (
             <Card key={question.id} className="question-card">
               <div className="question-head">
                 <div className="assessment-question-copy">
-                  <span className="assessment-question-number">{index + 1}</span>
+                  <span className="assessment-question-number">{new Intl.NumberFormat(locale).format(index + 1)}</span>
                   <div>
                     <h3>{question.prompt}</h3>
                     <div className="chips assessment-question-meta">
-                      <Badge>{competencyLabels.get(question.competency) ?? question.competency}</Badge>
-                      <Badge tone="amber">{question.points} pts</Badge>
-                      {suggested && (
-                        <Badge tone="purple"><CheckCircle2 size={11} /> AI observation ready</Badge>
-                      )}
+                      <Badge>
+                        {t(practicalAssessmentCompetencyLabels.get(question.competency) ?? question.competency)}
+                      </Badge>
+                      <Badge tone="purple">{t("{{count}} points", { count: new Intl.NumberFormat(locale).format(question.points) })}</Badge>
                     </div>
                   </div>
                 </div>
@@ -135,11 +147,15 @@ export default function AssessmentQuestionsPage() {
 
       <div className="wizard-actions">
         <LinkButton href="/assessments/new/upload" variant="secondary" icon={ArrowLeft}>
-          Back
+          {t("Back")}
         </LinkButton>
-        <LinkButton href="/assessments/new/answers" icon={ArrowRight}>
-          Next: Fill Answers
-        </LinkButton>
+        <Button
+          icon={ArrowRight}
+          disabled={generating || !hasTenQuestions}
+          onClick={() => void continueToAnswers()}
+        >
+          {generating ? t("Generating Video Answers…") : t("Next: Generate Answers")}
+        </Button>
       </div>
     </div>
   );

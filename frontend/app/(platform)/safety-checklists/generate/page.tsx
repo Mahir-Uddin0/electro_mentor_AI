@@ -9,6 +9,7 @@ import {
 import { useMemo, useState, type FormEvent } from "react";
 
 import { Badge, Button, Card, LinkButton, PageHeading, ProgressBar } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import { frontendApi } from "@/lib/api/client";
 
 const generatedItems = [
@@ -25,6 +26,7 @@ const generatedItems = [
 type GeneratedChecklist = { id: string; title: string };
 
 export default function GenerateSafetyChecklistPage() {
+  const { locale, t } = useLanguage();
   const [task, setTask] = useState("");
   const [generated, setGenerated] = useState<GeneratedChecklist | null>(null);
   const [checked, setChecked] = useState<Set<number>>(new Set());
@@ -36,7 +38,7 @@ export default function GenerateSafetyChecklistPage() {
     event.preventDefault();
     const normalizedTask = task.trim();
     if (!normalizedTask) {
-      setError("Describe the electrical task before generating a checklist.");
+      setError(t("Describe the electrical task before generating a checklist."));
       return;
     }
     setLoading(true);
@@ -46,7 +48,7 @@ export default function GenerateSafetyChecklistPage() {
       setGenerated(result);
       setChecked(new Set());
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "The checklist could not be generated.");
+      setError(requestError instanceof Error ? requestError.message : t("The checklist could not be generated."));
     } finally {
       setLoading(false);
     }
@@ -64,8 +66,8 @@ export default function GenerateSafetyChecklistPage() {
   return (
     <>
       <PageHeading
-        title="AI Safety Tracker Generator"
-        description="Describe your electrical work and receive a task-aware safety checklist."
+        title={t("AI Safety Tracker Generator")}
+        description={t("Describe your electrical work and receive a task-aware safety checklist.")}
       />
 
       <Card className="generator-card">
@@ -73,12 +75,12 @@ export default function GenerateSafetyChecklistPage() {
           <textarea
             value={task}
             onChange={(event) => setTask(event.target.value)}
-            placeholder="e.g., Install a distribution board with 4 circuits for a house"
-            aria-label="Describe the electrical task"
+            placeholder={t("e.g., Install a distribution board with 4 circuits for a house")}
+            aria-label={t("Describe the electrical task")}
           />
           <div className="generator-actions">
             <Button type="submit" icon={Sparkles} disabled={loading || !task.trim()}>
-              {loading ? "Generating…" : "Generate Checklist"}
+              {loading ? t("Generating…") : t("Generate Checklist")}
             </Button>
           </div>
           {error && <div className="auth-message error" style={{ marginTop: 10 }}>{error}</div>}
@@ -90,8 +92,8 @@ export default function GenerateSafetyChecklistPage() {
           <Card>
             <div className="empty-state">
               <span className="empty-icon"><ClipboardList size={29} /></span>
-              <h2>No checklist generated yet</h2>
-              <p>Describe your electrical task above and click “Generate Checklist” to get an AI-powered safety checklist.</p>
+              <h2>{t("No checklist generated yet")}</h2>
+              <p>{t("Describe your electrical task above and click “Generate Checklist” to get an AI-powered safety checklist.")}</p>
             </div>
           </Card>
         ) : (
@@ -99,24 +101,24 @@ export default function GenerateSafetyChecklistPage() {
             <div className="checklist-items">
               <div className="result-title">
                 <div>
-                  <Badge tone="purple">AI generated · {generated.id}</Badge>
-                  <h2 style={{ margin: "10px 0 3px", fontSize: 17 }}>{generated.title}</h2>
-                  <p style={{ margin: 0, color: "var(--muted)", fontSize: 11 }}>Review each item with your instructor before starting work.</p>
+                  <Badge tone="purple">{t("AI generated")} · {generated.id}</Badge>
+                  <h2 style={{ margin: "10px 0 3px", fontSize: 17 }}>{t(generated.title)}</h2>
+                  <p style={{ margin: 0, color: "var(--muted)", fontSize: 11 }}>{t("Review each item with your instructor before starting work.")}</p>
                 </div>
-                <Button variant="ghost" icon={RotateCcw} onClick={() => setGenerated(null)}>Start Over</Button>
+                <Button variant="ghost" icon={RotateCcw} onClick={() => setGenerated(null)}>{t("Start Over")}</Button>
               </div>
               <div style={{ display: "grid", gap: 7, margin: "8px 0" }}>
-                <span style={{ color: "var(--muted)", fontSize: 11 }}>{checked.size} / {generatedItems.length} completed</span>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>{new Intl.NumberFormat(locale).format(checked.size)} / {new Intl.NumberFormat(locale).format(generatedItems.length)} {t("completed")}</span>
                 <ProgressBar value={progress} tone={progress === 100 ? "green" : "blue"} />
               </div>
               {generatedItems.map((item, index) => (
                 <label key={item} className={`check-row ${checked.has(index) ? "checked" : ""}`}>
                   <input type="checkbox" checked={checked.has(index)} onChange={() => toggle(index)} />
-                  <span>{item}</span>
+                  <span>{t(item)}</span>
                 </label>
               ))}
               <div className="inline-actions" style={{ justifyContent: "flex-start", marginTop: 5 }}>
-                <LinkButton href="/safety-checklists/house-wiring" variant="secondary" icon={CheckCircle2}>Open Full Checklist</LinkButton>
+                <LinkButton href="/safety-checklists/house-wiring" variant="secondary" icon={CheckCircle2}>{t("Open Full Checklist")}</LinkButton>
               </div>
             </div>
           </Card>

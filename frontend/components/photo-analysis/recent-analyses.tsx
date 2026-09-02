@@ -1,7 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import { Camera, ChevronRight, Eye } from "lucide-react";
 
 import { Badge, Card, SectionTitle } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import type {
   PhotoAnalysisResult,
   PhotoFaultSeverity,
@@ -34,11 +37,11 @@ function resultBadge(analysis: PhotoAnalysisResult) {
   return { label: "New photo needed", tone: "gray" } as const;
 }
 
-function formatDate(value: string) {
+function formatDate(value: string, locale: string, recently: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? "Recently"
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+    ? recently
+    : new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
 export function RecentPhotoAnalyses({
@@ -46,12 +49,13 @@ export function RecentPhotoAnalyses({
 }: {
   analyses: PhotoAnalysisResult[];
 }) {
+  const { locale, t } = useLanguage();
   return (
     <>
-      <SectionTitle title="Analyses This Session" />
+      <SectionTitle title={t("Analyses This Session")} />
       {analyses.length === 0 ? (
         <Card className="generator-card" style={{ color: "var(--muted)", fontSize: 12 }}>
-          Completed photo analyses from this browser session will appear here.
+          {t("Completed photo analyses from this browser session will appear here.")}
         </Card>
       ) : (
         <div className="history-grid">
@@ -66,11 +70,11 @@ export function RecentPhotoAnalyses({
                   <div className="history-thumb" style={{ position: "relative" }}>
                     <Camera size={22} />
                     <span style={{ position: "absolute", top: 9, right: 9 }}>
-                      <Badge tone={badge.tone}>{badge.label}</Badge>
+                      <Badge tone={badge.tone}>{t(badge.label)}</Badge>
                     </span>
                   </div>
-                  <h3>{analysisTitle(analysis)}</h3>
-                  <p>{formatDate(analysis.analyzed_at)}</p>
+                  <h3>{analysis.primary_fault ? analysisTitle(analysis) : t(analysisTitle(analysis))}</h3>
+                  <p>{formatDate(analysis.analyzed_at, locale, t("Recently"))}</p>
                   <div className="history-meta">
                     <span
                       style={{
@@ -81,11 +85,11 @@ export function RecentPhotoAnalyses({
                         fontSize: 10,
                       }}
                     >
-                      <Eye size={12} /> View <ChevronRight size={12} />
+                      <Eye size={12} /> {t("View")} <ChevronRight size={12} />
                     </span>
                     {analysis.primary_fault && (
                       <Badge tone="green">
-                        {Math.round(analysis.primary_fault.confidence)}% confidence
+                        {t("{{score}}% confidence", { score: new Intl.NumberFormat(locale).format(Math.round(analysis.primary_fault.confidence)) })}
                       </Badge>
                     )}
                   </div>

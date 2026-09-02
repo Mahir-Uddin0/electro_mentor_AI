@@ -22,6 +22,7 @@ import {
 } from "react";
 
 import { Badge, Button, Card, MetricCard, PageHeading } from "@/components/ui";
+import { useLanguage } from "@/components/language-provider";
 import {
   frontendApi,
   type CreateTaskInput,
@@ -78,11 +79,11 @@ const emptyForm: CreateTaskInput = {
   due_date: null,
 };
 
-function formatDate(value: string) {
+function formatDate(value: string, locale: string) {
   const date = new Date(value.length === 10 ? `${value}T12:00:00` : value);
   return Number.isNaN(date.getTime())
     ? value
-    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+    : new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
 function availableStatuses(status: TaskStatus): TaskStatus[] {
@@ -102,6 +103,7 @@ function TaskCard({
   onUpdate: (taskId: string, changes: UpdateTaskInput) => Promise<void>;
   onDelete: (task: Task) => Promise<void>;
 }) {
+  const { locale, t } = useLanguage();
   const priorityTone = task.priority === "high"
     ? "red"
     : task.priority === "medium"
@@ -112,15 +114,15 @@ function TaskCard({
     <Card className={`tracker-task-card ${busy ? "is-busy" : ""}`}>
       <div className="tracker-task-head">
         <Badge tone={priorityTone}>
-          <Flag size={11} /> {priorityLabels[task.priority]} priority
+          <Flag size={11} /> {t(priorityLabels[task.priority])} {t("Priority")}
         </Badge>
         <button
           type="button"
           className="tracker-delete"
           onClick={() => void onDelete(task)}
           disabled={busy}
-          aria-label={`Delete ${task.title}`}
-          title="Delete task"
+          aria-label={`${t("Delete")} ${task.title}`}
+          title={t("Delete task")}
         >
           <Trash2 size={15} />
         </button>
@@ -134,30 +136,30 @@ function TaskCard({
       <div className="tracker-task-date">
         <CalendarDays size={14} />
         {task.status === "completed" && task.completed_at
-          ? `Completed ${formatDate(task.completed_at)}`
+          ? `${t("Completed")} ${formatDate(task.completed_at, locale)}`
           : task.due_date
-            ? `Due ${formatDate(task.due_date)}`
-            : "No due date"}
+            ? `${t("Due")} ${formatDate(task.due_date, locale)}`
+            : t("No due date")}
       </div>
 
       <div className="tracker-task-controls">
         <label>
-          <span>Status</span>
+          <span>{t("Status")}</span>
           <select
             value={task.status}
             disabled={busy || task.status === "completed"}
             onChange={(event) =>
               void onUpdate(task.id, { status: event.target.value as TaskStatus })
             }
-            aria-label={`Status for ${task.title}`}
+            aria-label={`${t("Status")} ${task.title}`}
           >
             {availableStatuses(task.status).map((status) => (
-              <option value={status} key={status}>{statusLabels[status]}</option>
+              <option value={status} key={status}>{t(statusLabels[status])}</option>
             ))}
           </select>
         </label>
         <label>
-          <span>Priority</span>
+          <span>{t("Priority")}</span>
           <select
             value={task.priority}
             disabled={busy}
@@ -166,20 +168,21 @@ function TaskCard({
                 priority: event.target.value as TaskPriority,
               })
             }
-            aria-label={`Priority for ${task.title}`}
+            aria-label={`${t("Priority")} ${task.title}`}
           >
             {(["high", "medium", "low"] as const).map((priority) => (
-              <option value={priority} key={priority}>{priorityLabels[priority]}</option>
+              <option value={priority} key={priority}>{t(priorityLabels[priority])}</option>
             ))}
           </select>
         </label>
       </div>
-      {busy && <span className="tracker-task-saving"><span className="spinner" /> Saving…</span>}
+      {busy && <span className="tracker-task-saving"><span className="spinner" /> {t("Saving…")}</span>}
     </Card>
   );
 }
 
 export default function TaskTrackerPage() {
+  const { locale, t } = useLanguage();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -200,12 +203,12 @@ export default function TaskTrackerPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "Your tasks could not be loaded.",
+          : t("Your tasks could not be loaded."),
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadTasks();
@@ -271,7 +274,7 @@ export default function TaskTrackerPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "The task could not be updated.",
+          : t("The task could not be updated."),
       );
     } finally {
       setTaskBusy(taskId, false);
@@ -279,7 +282,7 @@ export default function TaskTrackerPage() {
   }
 
   async function deleteTask(task: Task) {
-    if (!window.confirm(`Delete “${task.title}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("Delete “{{title}}”? This cannot be undone.", { title: task.title }))) return;
     setTaskBusy(task.id, true);
     setError("");
     try {
@@ -289,7 +292,7 @@ export default function TaskTrackerPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "The task could not be deleted.",
+          : t("The task could not be deleted."),
       );
     } finally {
       setTaskBusy(task.id, false);
@@ -300,7 +303,7 @@ export default function TaskTrackerPage() {
     event.preventDefault();
     const title = form.title.trim();
     if (!title) {
-      setFormError("Enter a task title.");
+      setFormError(t("Enter a task title."));
       return;
     }
 
@@ -320,7 +323,7 @@ export default function TaskTrackerPage() {
       setFormError(
         requestError instanceof Error
           ? requestError.message
-          : "The task could not be created.",
+          : t("The task could not be created."),
       );
     } finally {
       setCreating(false);
@@ -334,16 +337,16 @@ export default function TaskTrackerPage() {
   return (
     <>
       <PageHeading
-        title="Task Tracker"
-        description="Create, prioritize, and move your work from upcoming to completed."
-        action={<Button icon={Plus} onClick={openCreateTask}>Create Task</Button>}
+        title={t("Task Tracker")}
+        description={t("Create, prioritize, and move your work from upcoming to completed.")}
+        action={<Button icon={Plus} onClick={openCreateTask}>{t("Create Task")}</Button>}
       />
 
       <div className="metric-grid">
-        <MetricCard label="All Tasks" value={tasks.length} icon={ListTodo} />
-        <MetricCard label="Upcoming" value={upcomingCount} icon={CircleDashed} tone="amber" />
-        <MetricCard label="In Progress" value={inProgressCount} icon={PlayCircle} tone="blue" />
-        <MetricCard label="Completed" value={completedCount} icon={CheckCircle2} tone="green" />
+        <MetricCard label={t("All Tasks")} value={new Intl.NumberFormat(locale).format(tasks.length)} icon={ListTodo} />
+        <MetricCard label={t("Upcoming")} value={new Intl.NumberFormat(locale).format(upcomingCount)} icon={CircleDashed} tone="amber" />
+        <MetricCard label={t("In Progress")} value={new Intl.NumberFormat(locale).format(inProgressCount)} icon={PlayCircle} tone="blue" />
+        <MetricCard label={t("Completed")} value={new Intl.NumberFormat(locale).format(completedCount)} icon={CheckCircle2} tone="green" />
       </div>
 
       <div className="filters tracker-filters">
@@ -352,8 +355,8 @@ export default function TaskTrackerPage() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search your tasks…"
-            aria-label="Search tasks"
+            placeholder={t("Search your tasks…")}
+            aria-label={t("Search your tasks…")}
           />
         </label>
       </div>
@@ -362,14 +365,14 @@ export default function TaskTrackerPage() {
         <div className="tracker-error auth-message error" role="alert">
           <span>{error}</span>
           <Button variant="ghost" icon={RefreshCw} onClick={() => void loadTasks()}>
-            Retry
+            {t("Retry")}
           </Button>
         </div>
       )}
 
       {loading ? (
         <div className="full-loader tracker-loader">
-          <span className="spinner" /> Loading your tasks…
+          <span className="spinner" /> {t("Loading your tasks…")}
         </div>
       ) : (
         <div className="tracker-board">
@@ -381,10 +384,10 @@ export default function TaskTrackerPage() {
                 <header className="tracker-column-head">
                   <span className="tracker-column-icon"><Icon size={18} /></span>
                   <div>
-                    <h2>{column.label}</h2>
-                    <p>{column.description}</p>
+                    <h2>{t(column.label)}</h2>
+                    <p>{t(column.description)}</p>
                   </div>
-                  <span className="tracker-column-count">{columnTasks.length}</span>
+                  <span className="tracker-column-count">{new Intl.NumberFormat(locale).format(columnTasks.length)}</span>
                 </header>
                 <div className="tracker-column-list">
                   {columnTasks.map((task) => (
@@ -399,8 +402,8 @@ export default function TaskTrackerPage() {
                   {!columnTasks.length && (
                     <div className="tracker-column-empty">
                       <Icon size={22} />
-                      <strong>{query ? "No matching tasks" : `No ${column.label.toLowerCase()} tasks`}</strong>
-                      <span>{query ? "Try a different search." : "Tasks will appear here automatically."}</span>
+                      <strong>{query ? t("No matching tasks") : t("No tasks here yet")}</strong>
+                      <span>{query ? t("Try a different search.") : t("Tasks will appear here automatically.")}</span>
                     </div>
                   )}
                 </div>
@@ -426,15 +429,15 @@ export default function TaskTrackerPage() {
           >
             <div className="tracker-modal-head">
               <div>
-                <h2 id="create-task-title">Create a task</h2>
-                <p>Add work to your upcoming or in-progress list.</p>
+                <h2 id="create-task-title">{t("Create a task")}</h2>
+                <p>{t("Add work to your upcoming or in-progress list.")}</p>
               </div>
               <button
                 type="button"
                 className="icon-button"
                 onClick={() => setCreateOpen(false)}
                 disabled={creating}
-                aria-label="Close create task form"
+                aria-label={t("Close create task form")}
               >
                 <X size={19} />
               </button>
@@ -442,7 +445,7 @@ export default function TaskTrackerPage() {
 
             <form className="tracker-form" onSubmit={createTask}>
               <div className="field">
-                <label htmlFor="task-title">Task title <span aria-hidden="true">*</span></label>
+                <label htmlFor="task-title">{t("Task title")} <span aria-hidden="true">*</span></label>
                 <input
                   id="task-title"
                   autoFocus
@@ -450,22 +453,22 @@ export default function TaskTrackerPage() {
                   maxLength={160}
                   value={form.title}
                   onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-                  placeholder="e.g. Wire the workshop distribution board"
+                  placeholder={t("e.g. Wire the workshop distribution board")}
                 />
               </div>
               <div className="field">
-                <label htmlFor="task-description">Description</label>
+                <label htmlFor="task-description">{t("Description")}</label>
                 <textarea
                   id="task-description"
                   maxLength={2000}
                   value={form.description}
                   onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                  placeholder="Add notes or the result you want to achieve."
+                  placeholder={t("Add notes or the result you want to achieve.")}
                 />
               </div>
               <div className="tracker-form-row">
                 <div className="field">
-                  <label htmlFor="task-status">Status <span aria-hidden="true">*</span></label>
+                  <label htmlFor="task-status">{t("Status")} <span aria-hidden="true">*</span></label>
                   <select
                     id="task-status"
                     required
@@ -475,12 +478,12 @@ export default function TaskTrackerPage() {
                       status: event.target.value as CreateTaskInput["status"],
                     }))}
                   >
-                    <option value="upcoming">Upcoming</option>
-                    <option value="in_progress">In Progress</option>
+                    <option value="upcoming">{t("Upcoming")}</option>
+                    <option value="in_progress">{t("In Progress")}</option>
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="task-priority">Priority <span aria-hidden="true">*</span></label>
+                  <label htmlFor="task-priority">{t("Priority")} <span aria-hidden="true">*</span></label>
                   <select
                     id="task-priority"
                     required
@@ -490,14 +493,14 @@ export default function TaskTrackerPage() {
                       priority: event.target.value as TaskPriority,
                     }))}
                   >
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
+                    <option value="high">{t("High")}</option>
+                    <option value="medium">{t("Medium")}</option>
+                    <option value="low">{t("Low")}</option>
                   </select>
                 </div>
               </div>
               <div className="field">
-                <label htmlFor="task-due-date">Due date</label>
+                <label htmlFor="task-due-date">{t("Due date")}</label>
                 <input
                   id="task-due-date"
                   type="date"
@@ -518,10 +521,10 @@ export default function TaskTrackerPage() {
                   disabled={creating}
                   onClick={() => setCreateOpen(false)}
                 >
-                  Cancel
+                  {t("Cancel")}
                 </Button>
                 <Button type="submit" icon={Plus} disabled={creating}>
-                  {creating ? "Creating…" : "Create Task"}
+                  {creating ? t("Creating…") : t("Create Task")}
                 </Button>
               </div>
             </form>

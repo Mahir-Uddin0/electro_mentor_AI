@@ -8,10 +8,11 @@ import {
   CheckCircle2,
   Save,
   Sparkles,
-  UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { practicalAssessmentCompetencyLabels } from "@/components/assessment/assessment-competencies";
+import { useLanguage } from "@/components/language-provider";
 import {
   AssessmentLoadError,
   AssessmentLoading,
@@ -35,10 +36,10 @@ function confidencePercent(value: number | null) {
 
 export default function AssessmentAnswersPage() {
   const router = useRouter();
+  const { locale, t } = useLanguage();
   const {
     assessment,
     questions,
-    checklistDefinitions,
     loading,
     error,
     refresh,
@@ -53,6 +54,12 @@ export default function AssessmentAnswersPage() {
   useEffect(() => {
     if (!loading && assessment?.status === "completed") {
       router.replace("/assessments/new/results");
+    } else if (
+      !loading &&
+      assessment?.status === "draft" &&
+      assessment.video_status !== "answers_generated"
+    ) {
+      router.replace("/assessments/new/questions");
     }
   }, [assessment, loading, router]);
 
@@ -61,12 +68,6 @@ export default function AssessmentAnswersPage() {
       (assessment?.answers ?? []).map((answer) => [answer.question_id, answer]),
     ),
     [assessment?.answers],
-  );
-  const competencyLabels = useMemo(
-    () => new Map(
-      checklistDefinitions.map((section) => [section.competency, section.label]),
-    ),
-    [checklistDefinitions],
   );
   const serializedAnswers = useMemo(
     () => questions.map((question) => {
@@ -80,7 +81,11 @@ export default function AssessmentAnswersPage() {
     ? Math.round((answeredCount / questions.length) * 100)
     : 0;
 
-  if (loading || assessment?.status === "completed") {
+  if (
+    loading ||
+    assessment?.status === "completed" ||
+    assessment?.video_status === "questions_generated"
+  ) {
     return <AssessmentLoading label="Loading your answers…" />;
   }
   if (error) {
@@ -104,10 +109,10 @@ export default function AssessmentAnswersPage() {
     setSavedMessage("");
     try {
       await persistAnswers();
-      setSavedMessage("Your answer draft has been saved.");
+      setSavedMessage(t("Your answer draft has been saved."));
     } catch (caught) {
       setFormError(
-        caught instanceof Error ? caught.message : "Your answers could not be saved.",
+        caught instanceof Error ? caught.message : t("Your answers could not be saved."),
       );
     } finally {
       setSavingMode(null);
@@ -122,7 +127,7 @@ export default function AssessmentAnswersPage() {
       router.push("/assessments/new/questions");
     } catch (caught) {
       setFormError(
-        caught instanceof Error ? caught.message : "Your answers could not be saved.",
+        caught instanceof Error ? caught.message : t("Your answers could not be saved."),
       );
       setSavingMode(null);
     }
@@ -131,14 +136,14 @@ export default function AssessmentAnswersPage() {
   async function evaluate() {
     const firstMissing = serializedAnswers.find((item) => !item.answer);
     if (firstMissing) {
-      setFormError("Complete all ten answers before requesting your assessment.");
+      setFormError(t("Complete all ten answers before generating your assessment results."));
       window.setTimeout(() => {
         document.getElementById(`assessment-answer-${firstMissing.question_id}`)?.focus();
       }, 0);
       return;
     }
     if (!window.confirm(
-      "Submit this one-time assessment? After Gemini saves the result, your answers and competency profile cannot be edited or retaken.",
+      t("Submit these final answers for assessment? Gemini will score the work and generate improvement suggestions from the video and your answers."),
     )) {
       return;
     }
@@ -150,14 +155,14 @@ export default function AssessmentAnswersPage() {
       await persistAnswers();
       const response = await evaluateAssessment(assessmentId);
       if (response.assessment?.status !== "completed") {
-        throw new Error("The assessment result was not completed. Please try again.");
+        throw new Error(t("The practical assessment was not completed. Please try again."));
       }
       router.push("/assessments/new/results");
     } catch (caught) {
       setFormError(
         caught instanceof Error
           ? caught.message
-          : "Gemini could not complete the assessment.",
+          : t("Gemini could not complete your practical assessment."),
       );
       setSavingMode(null);
     }
@@ -167,41 +172,31 @@ export default function AssessmentAnswersPage() {
 
   return (
     <div>
-      <AssessmentStepper currentStep={3} assessmentStatus={assessment.status} />
+      <AssessmentStepper
+        currentStep={3}
+        assessmentStatus={assessment.status}
+        videoStatus={assessment.video_status}
+      />
       <PageHeading
-        title="Fill Assessment Answers"
-        description="Step 3 of 6 — Review AI observations, complete empty answers, and edit anything that needs correction."
+        title={t("Fill Assessment Answers")}
+        description={t("Step 3 of 6 — Review Gemini's video-based answers, fill every empty answer, and edit anything that does not accurately describe the work.")}
       />
 
       <div className="assessment-answer-progress">
         <div>
-          <strong>Progress</strong>
-          <strong>{answeredCount} of {questions.length} questions answered</strong>
+          <strong>{t("Progress")}</strong>
+          <strong>{t("{{answered}} of {{total}} questions answered", { answered: new Intl.NumberFormat(locale).format(answeredCount), total: new Intl.NumberFormat(locale).format(questions.length) })}</strong>
         </div>
         <ProgressBar value={progress} tone={progress === 100 ? "green" : "blue"} />
       </div>
 
-      {assessment.video_status === "analyzed" ? (
-        <div className="alert alert-green assessment-answer-notice">
-          <Bot size={19} />
-          <div>
-            <strong>AI suggestions are editable</strong>
-            <p>Only observations supported by the video were filled. Review every suggestion before submitting.</p>
-          </div>
+      <div className="alert alert-green assessment-answer-notice">
+        <Bot size={19} />
+        <div>
+          <strong>{t("AI-generated answers are editable")}</strong>
+          <p>{t("Gemini filled only answers supported by the work video. Complete blank answers manually and review every generated answer before submission.")}</p>
         </div>
-      ) : (
-        <div className="alert alert-amber assessment-answer-notice">
-          <UserRound size={19} />
-          <div>
-            <strong>Manual answers required</strong>
-            <p>
-              {assessment.video_status === "failed"
-                ? "The optional video could not be analyzed. Complete every answer manually."
-                : "No video was provided. Complete every answer manually."}
-            </p>
-          </div>
-        </div>
-      )}
+      </div>
 
       {(formError || savedMessage) && (
         <div className={`auth-message ${formError ? "error" : "success"} assessment-form-message`}>
@@ -223,28 +218,29 @@ export default function AssessmentAnswersPage() {
               className={`answer-card ${!value.trim() ? "needs-answer" : ""}`}
             >
               <div className="assessment-answer-layout">
-                <span className="assessment-question-number">{index + 1}</span>
+                <span className="assessment-question-number">{new Intl.NumberFormat(locale).format(index + 1)}</span>
                 <div>
                   <strong className="assessment-answer-prompt">{question.prompt}</strong>
                   <div className="chips assessment-question-meta">
-                    <Badge>{competencyLabels.get(question.competency) ?? question.competency}</Badge>
-                    <Badge tone="amber">{question.points} pts</Badge>
+                    <Badge>
+                      {t(practicalAssessmentCompetencyLabels.get(question.competency) ?? question.competency)}
+                    </Badge>
                     {hasAiSuggestion ? (
                       <Badge tone="purple">
-                        <Sparkles size={11} /> {!value.trim() ? "AI suggestion cleared" : edited ? "AI suggestion edited" : "AI suggested"}
+                        <Sparkles size={11} /> {!value.trim() ? t("AI suggestion cleared") : edited ? t("AI suggestion edited") : t("AI suggested")}
                       </Badge>
                     ) : (
-                      <Badge tone="gray">Manual answer needed</Badge>
+                      <Badge tone="gray">{t("Manual answer needed")}</Badge>
                     )}
                   </div>
 
                   {hasAiSuggestion && (
                     <div className="assessment-confidence">
-                      <span>AI confidence</span>
+                      <span>{t("AI confidence")}</span>
                       <span className="assessment-confidence-track">
                         <span style={{ width: `${confidence}%`, background: confidenceTone }} />
                       </span>
-                      <strong style={{ color: confidenceTone }}>{confidence}%</strong>
+                      <strong style={{ color: confidenceTone }}>{new Intl.NumberFormat(locale).format(confidence)}%</strong>
                     </div>
                   )}
 
@@ -253,14 +249,14 @@ export default function AssessmentAnswersPage() {
                       id={`assessment-answer-${question.id}`}
                       maxLength={4000}
                       disabled={busy}
-                      aria-label={`Answer to question ${index + 1}`}
+                      aria-label={`${t("Your answer")} ${new Intl.NumberFormat(locale).format(index + 1)}`}
                       value={value}
                       placeholder={
                         hasAiSuggestion && value.trim()
-                          ? "Review or edit the AI suggestion"
+                          ? t("Review or edit the AI suggestion")
                           : hasAiSuggestion
-                            ? "Enter a replacement for the cleared AI suggestion"
-                            : "Enter your answer based on the work you performed"
+                            ? t("Enter a replacement for the cleared AI suggestion")
+                            : t("Describe the relevant work, decision, or procedure in your own words")
                       }
                       onChange={(event) => {
                         updateLocalAnswer(question.id, event.target.value);
@@ -270,14 +266,14 @@ export default function AssessmentAnswersPage() {
                     />
                     <span className="assessment-answer-hint">
                       {value.trim()
-                        ? `${value.length.toLocaleString()} / 4,000 characters`
-                        : "This answer is required before evaluation."}
+                        ? t("{{count}} / 4,000 characters", { count: value.length.toLocaleString(locale) })
+                        : t("This answer is required before evaluation.")}
                     </span>
                   </div>
 
                   {storedAnswer?.ai_evidence && (
                     <div className="assessment-evidence">
-                      <strong>Observed evidence</strong>
+                      <strong>{t("Evidence found in your work video")}</strong>
                       <p>{storedAnswer.ai_evidence}</p>
                     </div>
                   )}
@@ -292,8 +288,8 @@ export default function AssessmentAnswersPage() {
         <Card className="assessment-evaluating">
           <span className="spinner" />
           <div>
-            <strong>Gemini is assessing your practical competency…</strong>
-            <p>This can take a little while. Keep this page open until the results are saved.</p>
+            <strong>{t("Gemini is assessing your practical work…")}</strong>
+            <p>{t("Skill scoring and improvement suggestions are being generated together. Keep this page open until both are saved.")}</p>
           </div>
         </Card>
       )}
@@ -305,7 +301,7 @@ export default function AssessmentAnswersPage() {
           disabled={busy}
           onClick={() => void saveAndGoBack()}
         >
-          {savingMode === "back" ? "Saving…" : "Back"}
+          {savingMode === "back" ? t("Saving…") : t("Back")}
         </Button>
         <div className="assessment-answer-actions">
           <Button
@@ -314,14 +310,14 @@ export default function AssessmentAnswersPage() {
             disabled={busy}
             onClick={() => void saveDraft()}
           >
-            {savingMode === "draft" ? "Saving…" : "Save Draft"}
+            {savingMode === "draft" ? t("Saving…") : t("Save Draft")}
           </Button>
           <Button
             icon={answeredCount === questions.length ? CheckCircle2 : ArrowRight}
             disabled={busy || questions.length === 0}
             onClick={() => void evaluate()}
           >
-            {savingMode === "evaluate" ? "Assessing…" : "Save & View Results"}
+            {savingMode === "evaluate" ? t("Generating Results…") : t("Save & View Results")}
           </Button>
         </div>
       </div>

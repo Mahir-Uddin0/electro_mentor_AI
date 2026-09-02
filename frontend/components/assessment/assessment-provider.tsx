@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -14,7 +15,6 @@ import {
 import {
   frontendApi,
   type PracticalAssessment,
-  type PracticalAssessmentChecklistDefinition,
   type PracticalAssessmentQuestion,
   type PracticalAssessmentResponse,
   type SavePracticalAssessmentAnswersInput,
@@ -24,12 +24,15 @@ import {
 type AssessmentContextValue = {
   assessment: PracticalAssessment | null;
   questions: PracticalAssessmentQuestion[];
-  checklistDefinitions: PracticalAssessmentChecklistDefinition[];
+  historyAssessmentId: string | null;
   loading: boolean;
   error: string;
   refresh: () => Promise<PracticalAssessmentResponse>;
   startAssessment: (
     input: StartPracticalAssessmentInput,
+  ) => Promise<PracticalAssessmentResponse>;
+  generateAnswers: (
+    assessmentId: string,
   ) => Promise<PracticalAssessmentResponse>;
   updateLocalAnswer: (questionId: string, answer: string) => void;
   saveAnswers: (
@@ -56,10 +59,11 @@ export function PracticalAssessmentProvider({
 }: {
   children: ReactNode;
 }) {
+  const searchParams = useSearchParams();
+  const historyAssessmentId = searchParams.get("assessmentId")?.trim() || null;
   const [payload, setPayload] = useState<PracticalAssessmentResponse>({
     assessment: null,
     questions: [],
-    checklist_definitions: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -69,7 +73,6 @@ export function PracticalAssessmentProvider({
     setPayload({
       assessment: nextPayload.assessment,
       questions: nextPayload.questions,
-      checklist_definitions: nextPayload.checklist_definitions,
     });
     setError("");
   }, []);
@@ -79,7 +82,9 @@ export function PracticalAssessmentProvider({
     setLoading(true);
     setError("");
     try {
-      const response = await frontendApi.getMyPracticalAssessment();
+      const response = historyAssessmentId
+        ? await frontendApi.getPracticalAssessment(historyAssessmentId)
+        : await frontendApi.getMyPracticalAssessment();
       if (activeRequest === requestId.current) applyPayload(response);
       return response;
     } catch (caught) {
@@ -90,7 +95,7 @@ export function PracticalAssessmentProvider({
     } finally {
       if (activeRequest === requestId.current) setLoading(false);
     }
-  }, [applyPayload]);
+  }, [applyPayload, historyAssessmentId]);
 
   useEffect(() => {
     void refresh().catch(() => {});
@@ -148,6 +153,17 @@ export function PracticalAssessmentProvider({
     [],
   );
 
+  const generateAnswers = useCallback(
+    async (assessmentId: string) => {
+      const response = await frontendApi.generatePracticalAssessmentAnswers(
+        assessmentId,
+      );
+      applyPayload(response);
+      return response;
+    },
+    [applyPayload],
+  );
+
   const saveAnswers = useCallback(
     async (
       assessmentId: string,
@@ -178,21 +194,24 @@ export function PracticalAssessmentProvider({
     () => ({
       assessment: payload.assessment,
       questions: payload.questions,
-      checklistDefinitions: payload.checklist_definitions,
+      historyAssessmentId,
       loading,
       error,
       refresh,
       startAssessment,
+      generateAnswers,
       updateLocalAnswer,
       saveAnswers,
       evaluateAssessment,
     }),
     [
       payload,
+      historyAssessmentId,
       loading,
       error,
       refresh,
       startAssessment,
+      generateAnswers,
       updateLocalAnswer,
       saveAnswers,
       evaluateAssessment,

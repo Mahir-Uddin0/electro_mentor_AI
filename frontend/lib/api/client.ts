@@ -2,6 +2,7 @@ import {
   getFreshAccessToken,
   invalidateBrowserSession,
 } from "@/lib/supabase/session";
+import { getStoredLanguage, translate } from "@/lib/i18n";
 
 const backendUrl =
   process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ??
@@ -152,23 +153,14 @@ export type UpdateTaskInput = Partial<
 
 export type PracticalAssessmentStatus = "draft" | "completed";
 export type PracticalAssessmentVideoStatus =
-  | "not_provided"
-  | "analyzed"
-  | "failed";
+  | "questions_generated"
+  | "answers_generated";
 export type PracticalAssessmentAnswerSource =
   | "empty"
   | "ai"
   | "user"
   | "ai_edited";
 export type PracticalAssessmentPriority = "high" | "medium" | "low";
-export type PracticalAssessmentChecklistStatus =
-  | "mastered"
-  | "needs_improvement"
-  | "not_observed";
-export type PracticalAssessmentCriterionStatus =
-  | "met"
-  | "not_met"
-  | "not_observed";
 
 export type PracticalAssessmentQuestion = {
   id: string;
@@ -209,38 +201,11 @@ export type PracticalAssessmentSuggestion = {
   action_steps: string[];
 };
 
-export type PracticalAssessmentChecklistItemDefinition = {
-  id: string;
-  label: string;
-};
-
-export type PracticalAssessmentChecklistDefinition = {
-  competency: string;
-  label: string;
-  criteria: PracticalAssessmentChecklistItemDefinition[];
-};
-
-export type PracticalAssessmentChecklistItem = {
-  criterion_id: string;
-  label: string;
-  status: PracticalAssessmentCriterionStatus;
-  rationale: string;
-};
-
-export type PracticalAssessmentChecklistSection = {
-  competency: string;
-  label: string;
-  score: number;
-  status: PracticalAssessmentChecklistStatus;
-  criteria: PracticalAssessmentChecklistItem[];
-};
-
 export type PracticalAssessmentEvaluation = {
   summary: string;
   question_feedback: PracticalAssessmentQuestionFeedback[];
   skill_scores: PracticalAssessmentSkillScore[];
   suggestions: PracticalAssessmentSuggestion[];
-  checklist_sections: PracticalAssessmentChecklistSection[];
 };
 
 export type PracticalAssessment = {
@@ -248,13 +213,12 @@ export type PracticalAssessment = {
   user_id: string;
   questionnaire_version: string;
   status: PracticalAssessmentStatus;
-  topic: string;
-  project_name: string;
   video_status: PracticalAssessmentVideoStatus;
-  video_file_name: string | null;
-  video_mime_type: string | null;
-  video_size_bytes: number | null;
-  video_sha256: string | null;
+  video_file_name: string;
+  video_mime_type: string;
+  video_size_bytes: number;
+  video_sha256: string;
+  questions: PracticalAssessmentQuestion[];
   video_analysis: {
     answers: Array<{
       question_id: string;
@@ -275,7 +239,6 @@ export type PracticalAssessment = {
   grade: "A" | "B" | "C" | "D" | "F" | null;
   passed: boolean | null;
   evaluation: PracticalAssessmentEvaluation | null;
-  personalization_context: string | null;
   revision: number;
   created_at: string;
   updated_at: string;
@@ -285,13 +248,34 @@ export type PracticalAssessment = {
 export type PracticalAssessmentResponse = {
   assessment: PracticalAssessment | null;
   questions: PracticalAssessmentQuestion[];
-  checklist_definitions: PracticalAssessmentChecklistDefinition[];
+};
+
+export type PracticalAssessmentHistoryItem = {
+  id: string;
+  video_file_name: string;
+  overall_score: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+  passed: boolean;
+  safety_procedures_score: number;
+  tool_usage_score: number;
+  technical_knowledge_score: number;
+  work_quality_score: number;
+  testing_verification_score: number;
+  documentation_score: number;
+  created_at: string;
+  completed_at: string;
+};
+
+export type PracticalAssessmentHistoryResponse = {
+  assessments: PracticalAssessmentHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
 };
 
 export type StartPracticalAssessmentInput = {
-  topic: string;
-  projectName: string;
-  video?: File | null;
+  video: File;
 };
 
 export type SavePracticalAssessmentAnswersInput = {
@@ -310,7 +294,11 @@ async function apiFetch(
     : `${backendUrl}/api/v1/${normalizedPath}`;
   const accessToken = useMock ? null : await getFreshAccessToken();
   if (!useMock && !accessToken) {
-    throw new ApiError("Your session expired. Please sign in again.", 401);
+    const language = getStoredLanguage();
+    throw new ApiError(
+      translate(language, "Your session expired. Please sign in again."),
+      401,
+    );
   }
   const headers = new Headers(init.headers);
   if (!headers.has("Accept")) headers.set("Accept", "application/json");
@@ -320,11 +308,16 @@ async function apiFetch(
     headers.set("Content-Type", "application/json");
   }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  headers.set("Accept-Language", getStoredLanguage());
 
   const response = await fetch(url, { ...init, headers });
   if (!useMock && response.status === 401) {
     await invalidateBrowserSession();
-    throw new ApiError("Your session expired. Please sign in again.", 401);
+    const language = getStoredLanguage();
+    throw new ApiError(
+      translate(language, "Your session expired. Please sign in again."),
+      401,
+    );
   }
   if (!response.ok) {
     let message = "The request could not be completed.";
@@ -335,7 +328,10 @@ async function apiFetch(
       };
       message = body.detail ?? body.message ?? message;
     } catch {}
-    throw new ApiError(message, response.status);
+    throw new ApiError(
+      translate(getStoredLanguage(), message),
+      response.status,
+    );
   }
   return response;
 }
@@ -369,21 +365,39 @@ export const frontendApi = {
       {},
       { useMock: useMockAssessmentApi },
     ),
-  startPracticalAssessment: ({
-    topic,
-    projectName,
-    video,
-  }: StartPracticalAssessmentInput) => {
+  getPracticalAssessment: (assessmentId: string) =>
+    apiRequest<PracticalAssessmentResponse>(
+      `practical-assessments/${encodeURIComponent(assessmentId)}`,
+      {},
+      { useMock: useMockAssessmentApi },
+    ),
+  listPracticalAssessmentHistory: ({
+    limit = 12,
+    offset = 0,
+  }: {
+    limit?: number;
+    offset?: number;
+  } = {}) =>
+    apiRequest<PracticalAssessmentHistoryResponse>(
+      `practical-assessments/history?limit=${limit}&offset=${offset}`,
+      {},
+      { useMock: useMockAssessmentApi },
+    ),
+  startPracticalAssessment: ({ video }: StartPracticalAssessmentInput) => {
     const body = new FormData();
-    body.append("topic", topic);
-    body.append("project_name", projectName);
-    if (video) body.append("video", video, video.name);
+    body.append("video", video, video.name);
     return apiRequest<PracticalAssessmentResponse>(
       "practical-assessments",
       { method: "POST", body },
       { useMock: useMockAssessmentApi },
     );
   },
+  generatePracticalAssessmentAnswers: (assessmentId: string) =>
+    apiRequest<PracticalAssessmentResponse>(
+      `practical-assessments/${encodeURIComponent(assessmentId)}/generate-answers`,
+      { method: "POST" },
+      { useMock: useMockAssessmentApi },
+    ),
   savePracticalAssessmentAnswers: (
     assessmentId: string,
     answers: SavePracticalAssessmentAnswersInput[],

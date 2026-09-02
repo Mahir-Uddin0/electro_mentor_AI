@@ -94,15 +94,27 @@ function titleFromMessage(message: string) {
   return words.length < message.trim().length ? `${words}…` : words;
 }
 
-function mockAssistantAnswer(message: string) {
+function usesBangla(request: NextRequest) {
+  return request.headers.get("accept-language")?.toLowerCase().startsWith("bn") ?? false;
+}
+
+function mockText(bangla: boolean, english: string, bengali: string) {
+  return bangla ? bengali : english;
+}
+
+function mockAssistantAnswer(message: string, bangla: boolean) {
+  if (bangla) {
+    return `“${message}” সম্পর্কে কাজ শুরুর আগে প্রধান বিদ্যুৎ সরবরাহ বিচ্ছিন্ন করুন এবং সার্কিটে বিদ্যুৎ নেই তা যাচাই করুন। ওয়্যারিং গাইড অনুযায়ী সুরক্ষা যন্ত্র, কেবলের আকার, টার্মিনাল সংযোগ, আর্থিং ও সংযুক্ত লোড পরীক্ষা করুন। বাস্তব ব্যাকএন্ডের উত্তরের মতো এই প্রিভিউ উত্তরটিও মক কথোপকথনে সংরক্ষিত হয়েছে।`;
+  }
   return `For “${message}”, begin by isolating the supply and verifying that the circuit is de-energized. Inspect the protective device, cable sizing, terminations, earthing, and the connected load against the wiring guide. This preview answer is stored in the mock conversation just like a real backend response.`;
 }
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
-export async function GET(_request: NextRequest, { params }: RouteContext) {
+export async function GET(request: NextRequest, { params }: RouteContext) {
   const segments = (await params).path;
   const path = segments.join("/");
+  const bangla = usesBangla(request);
   const responses: Record<string, object> = {
     dashboard: { greeting: "Welcome back, Prince!" },
     guides: { total: 24 },
@@ -118,7 +130,12 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
 
   if (segments[0] === "conversations" && segments.length === 2) {
     const conversation = getConversationStore().get(segments[1]);
-    if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+    if (!conversation) {
+      return NextResponse.json(
+        { detail: mockText(bangla, "Conversation not found.", "কথোপকথনটি পাওয়া যায়নি।") },
+        { status: 404 },
+      );
+    }
     return NextResponse.json(conversation);
   }
 
@@ -128,40 +145,86 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
 export async function POST(request: NextRequest, { params }: RouteContext) {
   const segments = (await params).path;
   const path = segments.join("/");
+  const bangla = usesBangla(request);
 
   if (path === "photo-analysis") {
     const formData = await request.formData().catch(() => null);
     const image = formData?.get("image");
     if (!(image instanceof File)) {
-      return NextResponse.json({ detail: "Upload an image in the 'image' field." }, { status: 422 });
+      return NextResponse.json(
+        {
+          detail: mockText(
+            bangla,
+            "Upload an image in the 'image' field.",
+            "'image' ফিল্ডে একটি ছবি আপলোড করুন।",
+          ),
+        },
+        { status: 422 },
+      );
     }
     return NextResponse.json({
       analysis_id: `AN-${crypto.randomUUID().slice(0, 8)}`,
       status: "completed",
       outcome: "faults_detected",
-      summary: "The preview analyzer found a potentially loose terminal connection that should be checked after the circuit is safely isolated.",
+      summary: mockText(
+        bangla,
+        "The preview analyzer found a potentially loose terminal connection that should be checked after the circuit is safely isolated.",
+        "প্রিভিউ বিশ্লেষণে একটি সম্ভাব্য ঢিলা টার্মিনাল সংযোগ পাওয়া গেছে। সার্কিট নিরাপদে বিচ্ছিন্ন করার পর এটি পরীক্ষা করা উচিত।",
+      ),
       primary_fault: {
-        title: "Possible loose terminal connection",
-        description: "A conductor appears incompletely seated at a visible terminal.",
+        title: mockText(bangla, "Possible loose terminal connection", "সম্ভাব্য ঢিলা টার্মিনাল সংযোগ"),
+        description: mockText(
+          bangla,
+          "A conductor appears incompletely seated at a visible terminal.",
+          "দৃশ্যমান একটি টার্মিনালে পরিবাহীটি সম্পূর্ণভাবে বসানো হয়নি বলে মনে হচ্ছে।",
+        ),
         severity: "high",
         confidence: 91,
-        location: "Visible terminal block",
-        possible_cause: "The terminal may not have been tightened correctly or may have loosened after thermal cycling.",
-        repair_steps: [
-          "Isolate the circuit at its source and apply lockout/tagout.",
-          "Prove the circuit is de-energized with an approved tester.",
-          "Ask a qualified electrician to inspect and correctly terminate the conductor.",
-        ],
-        safety_warning: "Do not touch or tighten visible conductors while the circuit may be energized.",
-        required_ppe: ["Insulated gloves", "Safety goggles"],
-        required_tools: ["Approved voltage tester", "Torque screwdriver"],
-        estimated_repair_time: "15–30 minutes after safe isolation",
+        location: mockText(bangla, "Visible terminal block", "দৃশ্যমান টার্মিনাল ব্লক"),
+        possible_cause: mockText(
+          bangla,
+          "The terminal may not have been tightened correctly or may have loosened after thermal cycling.",
+          "টার্মিনালটি সঠিকভাবে আঁটা হয়নি অথবা বারবার গরম ও ঠান্ডা হওয়ার কারণে ঢিলা হয়ে যেতে পারে।",
+        ),
+        repair_steps: bangla
+          ? [
+              "উৎস থেকে সার্কিট বিচ্ছিন্ন করে লকআউট/ট্যাগআউট করুন।",
+              "অনুমোদিত টেস্টার দিয়ে সার্কিটে বিদ্যুৎ নেই তা নিশ্চিত করুন।",
+              "যোগ্য ইলেকট্রিশিয়ান দিয়ে পরিবাহীটি পরীক্ষা ও সঠিকভাবে সংযুক্ত করান।",
+            ]
+          : [
+              "Isolate the circuit at its source and apply lockout/tagout.",
+              "Prove the circuit is de-energized with an approved tester.",
+              "Ask a qualified electrician to inspect and correctly terminate the conductor.",
+            ],
+        safety_warning: mockText(
+          bangla,
+          "Do not touch or tighten visible conductors while the circuit may be energized.",
+          "সার্কিটে বিদ্যুৎ থাকার সম্ভাবনা থাকলে দৃশ্যমান পরিবাহী স্পর্শ বা আঁটবেন না।",
+        ),
+        required_ppe: bangla
+          ? ["ইনসুলেটেড গ্লাভস", "নিরাপত্তা চশমা"]
+          : ["Insulated gloves", "Safety goggles"],
+        required_tools: bangla
+          ? ["অনুমোদিত ভোল্টেজ টেস্টার", "টর্ক স্ক্রু-ড্রাইভার"]
+          : ["Approved voltage tester", "Torque screwdriver"],
+        estimated_repair_time: mockText(
+          bangla,
+          "15–30 minutes after safe isolation",
+          "নিরাপদে বিচ্ছিন্ন করার পর ১৫–৩০ মিনিট",
+        ),
       },
       other_faults: [],
       upload_guidance: {
         reason: null,
         recommended_photos: [],
-        photo_tips: ["Include a wider view showing the enclosure and cable routing."],
+        photo_tips: [
+          mockText(
+            bangla,
+            "Include a wider view showing the enclosure and cable routing.",
+            "এনক্লোজার ও কেবল চলাচলের পথসহ আরও বিস্তৃত দৃশ্যের ছবি দিন।",
+          ),
+        ],
       },
       analyzed_at: new Date().toISOString(),
     });
@@ -188,9 +251,19 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
   if (segments[0] === "conversations" && segments.length === 3 && segments[2] === "messages") {
     const conversation = getConversationStore().get(segments[1]);
-    if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+    if (!conversation) {
+      return NextResponse.json(
+        { detail: mockText(bangla, "Conversation not found.", "কথোপকথনটি পাওয়া যায়নি।") },
+        { status: 404 },
+      );
+    }
     const content = typeof body.message === "string" ? body.message.trim() : "";
-    if (!content) return NextResponse.json({ detail: "Message cannot be empty." }, { status: 422 });
+    if (!content) {
+      return NextResponse.json(
+        { detail: mockText(bangla, "Message cannot be empty.", "বার্তা খালি রাখা যাবে না।") },
+        { status: 422 },
+      );
+    }
 
     const createdAt = new Date().toISOString();
     const userMessage: MockMessage = {
@@ -200,12 +273,18 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       content,
       created_at: createdAt,
     };
-    const sources = [{ title: "Electrical workshop safety guide" }];
+    const sources = [{
+      title: mockText(
+        bangla,
+        "Electrical workshop safety guide",
+        "ইলেকট্রিক্যাল কর্মশালা নিরাপত্তা গাইড",
+      ),
+    }];
     const assistantMessage: MockMessage = {
       id: crypto.randomUUID(),
       conversation_id: conversation.id,
       role: "assistant",
-      content: mockAssistantAnswer(content),
+      content: mockAssistantAnswer(content, bangla),
       created_at: new Date().toISOString(),
       sources,
     };
@@ -224,33 +303,60 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
   }
 
   if (path === "checklists/generate") {
-    return NextResponse.json({ id: "CHK-204", title: typeof body.task === "string" ? body.task : "Safety checklist" });
+    return NextResponse.json({
+      id: "CHK-204",
+      title:
+        typeof body.task === "string"
+          ? body.task
+          : mockText(bangla, "Safety checklist", "নিরাপত্তা চেকলিস্ট"),
+    });
   }
   return NextResponse.json({ ok: true, path, received: body });
 }
 
 export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const segments = (await params).path;
+  const bangla = usesBangla(request);
   if (segments[0] !== "conversations" || segments.length !== 2) {
-    return NextResponse.json({ detail: "Not found." }, { status: 404 });
+    return NextResponse.json(
+      { detail: mockText(bangla, "Not found.", "পাওয়া যায়নি।") },
+      { status: 404 },
+    );
   }
   const conversation = getConversationStore().get(segments[1]);
-  if (!conversation) return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+  if (!conversation) {
+    return NextResponse.json(
+      { detail: mockText(bangla, "Conversation not found.", "কথোপকথনটি পাওয়া যায়নি।") },
+      { status: 404 },
+    );
+  }
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const title = typeof body.title === "string" ? body.title.trim() : "";
-  if (!title) return NextResponse.json({ detail: "Title cannot be empty." }, { status: 422 });
+  if (!title) {
+    return NextResponse.json(
+      { detail: mockText(bangla, "Title cannot be empty.", "শিরোনাম খালি রাখা যাবে না।") },
+      { status: 422 },
+    );
+  }
   conversation.title = title;
   conversation.updated_at = new Date().toISOString();
   return NextResponse.json(summary(conversation));
 }
 
-export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+export async function DELETE(request: NextRequest, { params }: RouteContext) {
   const segments = (await params).path;
+  const bangla = usesBangla(request);
   if (segments[0] !== "conversations" || segments.length !== 2) {
-    return NextResponse.json({ detail: "Not found." }, { status: 404 });
+    return NextResponse.json(
+      { detail: mockText(bangla, "Not found.", "পাওয়া যায়নি।") },
+      { status: 404 },
+    );
   }
   if (!getConversationStore().delete(segments[1])) {
-    return NextResponse.json({ detail: "Conversation not found." }, { status: 404 });
+    return NextResponse.json(
+      { detail: mockText(bangla, "Conversation not found.", "কথোপকথনটি পাওয়া যায়নি।") },
+      { status: 404 },
+    );
   }
   return new NextResponse(null, { status: 204 });
 }
