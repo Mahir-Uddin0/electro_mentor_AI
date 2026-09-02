@@ -1,4 +1,4 @@
-"""Public contracts for the one-time electrical learner profile."""
+"""Public and Gemini wire contracts for practical work-video assessment."""
 
 from datetime import datetime
 from typing import Literal, Self
@@ -6,18 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-QuestionId = Literal[
-    "electrical_experience",
-    "training_background",
-    "systems_familiarity",
-    "safety_habits",
-    "tools_familiarity",
-    "troubleshooting_approach",
-    "work_quality_habits",
-    "documentation_habits",
-    "confidence_support_needs",
-    "learning_goals_preferences",
-]
 CompetencyId = Literal[
     "safety_procedures",
     "tool_usage",
@@ -26,258 +14,20 @@ CompetencyId = Literal[
     "testing_verification",
     "documentation",
 ]
-ChecklistCriterionId = Literal[
-    "safety_supply_isolated",
-    "safety_absence_verified",
-    "safety_ppe_area",
-    "tools_selected",
-    "tools_used_correctly",
-    "tools_condition_control",
-    "technical_operation",
-    "technical_components",
-    "technical_sequence",
-    "quality_terminations",
-    "quality_routing",
-    "quality_integrity",
-    "testing_prechecks",
-    "testing_instrument",
-    "testing_results",
-    "docs_labels",
-    "docs_diagram",
-    "docs_results",
-]
 AssessmentStatus = Literal["draft", "completed"]
-VideoStatus = Literal["not_provided", "analyzed", "failed"]
+VideoStatus = Literal["questions_generated", "answers_generated"]
 AnswerSource = Literal["empty", "ai", "user", "ai_edited"]
 
-
-class AssessmentQuestionDefinition(BaseModel):
-    id: QuestionId
-    prompt: str
-    points: Literal[10] = 10
-    competency: CompetencyId
-
-
-class ChecklistCriterionDefinition(BaseModel):
-    id: ChecklistCriterionId
-    label: str
-
-
-class ChecklistSectionDefinition(BaseModel):
-    competency: CompetencyId
-    label: str
-    criteria: list[ChecklistCriterionDefinition]
-
-
-FIXED_QUESTIONS: tuple[AssessmentQuestionDefinition, ...] = (
-    AssessmentQuestionDefinition(
-        id="electrical_experience",
-        prompt=(
-            "How would you describe your current electrical experience, "
-            "including how long and in what settings you have learned or worked?"
-        ),
-        competency="technical_knowledge",
-    ),
-    AssessmentQuestionDefinition(
-        id="training_background",
-        prompt=(
-            "What electrical education, training, certifications, "
-            "apprenticeships, or informal learning have you completed?"
-        ),
-        competency="technical_knowledge",
-    ),
-    AssessmentQuestionDefinition(
-        id="systems_familiarity",
-        prompt=(
-            "Which electrical systems, circuits, equipment, or types of tasks "
-            "are you already familiar with?"
-        ),
-        competency="technical_knowledge",
-    ),
-    AssessmentQuestionDefinition(
-        id="safety_habits",
-        prompt=(
-            "What safety steps and personal protective equipment do you "
-            "normally use before and during electrical work?"
-        ),
-        competency="safety_procedures",
-    ),
-    AssessmentQuestionDefinition(
-        id="tools_familiarity",
-        prompt=(
-            "Which hand tools and electrical test instruments can you use "
-            "confidently, and which ones are less familiar?"
-        ),
-        competency="tool_usage",
-    ),
-    AssessmentQuestionDefinition(
-        id="troubleshooting_approach",
-        prompt=(
-            "When an electrical circuit or device is not working, how do you "
-            "usually troubleshoot it?"
-        ),
-        competency="testing_verification",
-    ),
-    AssessmentQuestionDefinition(
-        id="work_quality_habits",
-        prompt=(
-            "What habits do you follow to keep wiring and connections neat, "
-            "secure, protected, and reliable?"
-        ),
-        competency="work_quality",
-    ),
-    AssessmentQuestionDefinition(
-        id="documentation_habits",
-        prompt=(
-            "How do you normally record diagrams, labels, measurements, faults, "
-            "or completed work?"
-        ),
-        competency="documentation",
-    ),
-    AssessmentQuestionDefinition(
-        id="confidence_support_needs",
-        prompt=(
-            "Which electrical topics are you most confident in, and where do "
-            "you want more guidance?"
-        ),
-        competency="technical_knowledge",
-    ),
-    AssessmentQuestionDefinition(
-        id="learning_goals_preferences",
-        prompt=(
-            "What are your electrical learning goals, and how do you prefer "
-            "technical explanations or instructions to be presented?"
-        ),
-        competency="technical_knowledge",
-    ),
-)
-
-FIXED_CHECKLIST: tuple[ChecklistSectionDefinition, ...] = (
-    ChecklistSectionDefinition(
-        competency="safety_procedures",
-        label="Safety Procedures",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="safety_supply_isolated",
-                label="Describes isolating the supply before electrical work",
-            ),
-            ChecklistCriterionDefinition(
-                id="safety_absence_verified",
-                label="Describes verifying absence of voltage safely",
-            ),
-            ChecklistCriterionDefinition(
-                id="safety_ppe_area",
-                label="Identifies appropriate PPE and safe work-area habits",
-            ),
-        ],
-    ),
-    ChecklistSectionDefinition(
-        competency="tool_usage",
-        label="Tool Usage",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="tools_selected",
-                label="Reports familiarity with suitable, correctly rated tools",
-            ),
-            ChecklistCriterionDefinition(
-                id="tools_used_correctly",
-                label="Describes safe and appropriate tool or instrument use",
-            ),
-            ChecklistCriterionDefinition(
-                id="tools_condition_control",
-                label="Describes checking and caring for tools and test leads",
-            ),
-        ],
-    ),
-    ChecklistSectionDefinition(
-        competency="technical_knowledge",
-        label="Technical Knowledge",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="technical_operation",
-                label="Explains familiar electrical concepts at the reported level",
-            ),
-            ChecklistCriterionDefinition(
-                id="technical_components",
-                label="Identifies systems, components, or circuits already familiar",
-            ),
-            ChecklistCriterionDefinition(
-                id="technical_sequence",
-                label="Recognizes current knowledge limits and support needs",
-            ),
-        ],
-    ),
-    ChecklistSectionDefinition(
-        competency="work_quality",
-        label="Work Quality",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="quality_terminations",
-                label="Describes habits for secure and reliable terminations",
-            ),
-            ChecklistCriterionDefinition(
-                id="quality_routing",
-                label="Describes neat, supported, and protected cable routing",
-            ),
-            ChecklistCriterionDefinition(
-                id="quality_integrity",
-                label="Describes checking mechanical condition and integrity",
-            ),
-        ],
-    ),
-    ChecklistSectionDefinition(
-        competency="testing_verification",
-        label="Testing & Verification",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="testing_prechecks",
-                label="Describes a systematic and safe troubleshooting approach",
-            ),
-            ChecklistCriterionDefinition(
-                id="testing_instrument",
-                label="Reports selecting suitable test methods and instrument ranges",
-            ),
-            ChecklistCriterionDefinition(
-                id="testing_results",
-                label="Describes interpreting and verifying test results",
-            ),
-        ],
-    ),
-    ChecklistSectionDefinition(
-        competency="documentation",
-        label="Documentation",
-        criteria=[
-            ChecklistCriterionDefinition(
-                id="docs_labels",
-                label="Reports using clear circuit, conductor, or component labels",
-            ),
-            ChecklistCriterionDefinition(
-                id="docs_diagram",
-                label="Reports creating or updating diagrams and connection records",
-            ),
-            ChecklistCriterionDefinition(
-                id="docs_results",
-                label="Reports documenting readings, faults, and outcomes",
-            ),
-        ],
-    ),
-)
-
-QUESTION_IDS = tuple(question.id for question in FIXED_QUESTIONS)
-COMPETENCY_IDS = tuple(section.competency for section in FIXED_CHECKLIST)
-CHECKLIST_IDS_BY_COMPETENCY = {
-    section.competency: tuple(item.id for item in section.criteria)
-    for section in FIXED_CHECKLIST
+QUESTION_IDS = tuple(f"question_{number:02d}" for number in range(1, 11))
+COMPETENCY_LABELS: dict[CompetencyId, str] = {
+    "safety_procedures": "Safety Procedures",
+    "tool_usage": "Tool Usage",
+    "technical_knowledge": "Technical Knowledge",
+    "work_quality": "Work Quality",
+    "testing_verification": "Testing & Verification",
+    "documentation": "Documentation",
 }
-COMPETENCY_LABELS = {
-    section.competency: section.label for section in FIXED_CHECKLIST
-}
-CHECKLIST_LABELS = {
-    item.id: item.label
-    for section in FIXED_CHECKLIST
-    for item in section.criteria
-}
-
+COMPETENCY_IDS = tuple(COMPETENCY_LABELS)
 MIN_VIDEO_SUGGESTION_CONFIDENCE = 50
 
 
@@ -288,8 +38,83 @@ def _normalize_optional_text(value: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_required_text(value: str) -> str:
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise ValueError("text cannot be blank")
+    return normalized
+
+
+class AssessmentQuestionDefinition(BaseModel):
+    id: str = Field(pattern=r"^question_(0[1-9]|10)$")
+    prompt: str = Field(min_length=1, max_length=1_000)
+    points: Literal[10] = 10
+    competency: CompetencyId
+
+    @field_validator("prompt")
+    @classmethod
+    def normalize_prompt(cls, value: str) -> str:
+        return _normalize_required_text(value)
+
+
+# These deliberately small models are the only schemas sent to Gemini. Exact
+# counts, identifiers, labels, and storage constraints are enforced after the
+# response is parsed, keeping the provider-facing JSON schemas shallow.
+class GeminiGeneratedQuestion(BaseModel):
+    question_number: int
+    prompt: str
+    competency: CompetencyId
+
+
+class GeminiQuestionGeneration(BaseModel):
+    questions: list[GeminiGeneratedQuestion]
+
+
+class GeminiVideoAnswer(BaseModel):
+    question_number: int
+    answer: str | None
+    confidence: int
+    evidence: str | None
+
+
+class GeminiVideoAnswers(BaseModel):
+    answers: list[GeminiVideoAnswer]
+
+
+class GeminiQuestionFeedback(BaseModel):
+    question_number: int
+    score: int
+    feedback: str
+    evidence_basis: Literal["video", "answer", "both", "insufficient"]
+
+
+class GeminiSkillScore(BaseModel):
+    competency: CompetencyId
+    score: int
+    rationale: str
+    confidence: int
+
+
+class GeminiAssessmentResults(BaseModel):
+    summary: str
+    question_feedback: list[GeminiQuestionFeedback]
+    skill_scores: list[GeminiSkillScore]
+
+
+class GeminiImprovementSuggestion(BaseModel):
+    priority: Literal["high", "medium", "low"]
+    competency: CompetencyId
+    title: str
+    description: str
+    action_steps: list[str]
+
+
+class GeminiAssessmentSuggestions(BaseModel):
+    suggestions: list[GeminiImprovementSuggestion]
+
+
 class VideoAnswerSuggestion(BaseModel):
-    question_id: QuestionId
+    question_id: str = Field(pattern=r"^question_(0[1-9]|10)$")
     answer: str | None = Field(default=None, max_length=4_000)
     confidence: int = Field(ge=0, le=100)
     evidence: str | None = Field(default=None, max_length=1_000)
@@ -301,9 +126,6 @@ class VideoAnswerSuggestion(BaseModel):
 
     @model_validator(mode="after")
     def discard_unsupported_suggestion(self) -> Self:
-        # A model-produced answer is only an autofill candidate when Gemini
-        # supplies both a concrete evidence note and meaningful confidence.
-        # Anything weaker remains empty for the learner to answer manually.
         if (
             self.answer is None
             or self.evidence is None
@@ -335,7 +157,7 @@ class StoredVideoAnalysis(VideoInference):
 
 
 class AssessmentAnswer(BaseModel):
-    question_id: QuestionId
+    question_id: str = Field(pattern=r"^question_(0[1-9]|10)$")
     answer: str | None = Field(default=None, max_length=4_000)
     ai_answer: str | None = Field(default=None, max_length=4_000)
     answer_source: AnswerSource = "empty"
@@ -349,7 +171,7 @@ class AssessmentAnswer(BaseModel):
 
 
 class AssessmentAnswerInput(BaseModel):
-    question_id: QuestionId
+    question_id: str = Field(pattern=r"^question_(0[1-9]|10)$")
     answer: str | None = Field(default=None, max_length=4_000)
 
     @field_validator("answer")
@@ -372,10 +194,15 @@ class AssessmentAnswersUpdate(BaseModel):
 
 
 class QuestionFeedback(BaseModel):
-    question_id: QuestionId
+    question_id: str = Field(pattern=r"^question_(0[1-9]|10)$")
     score: int = Field(ge=0, le=10)
     feedback: str = Field(min_length=1, max_length=1_500)
     evidence_basis: Literal["video", "answer", "both", "insufficient"]
+
+    @field_validator("feedback")
+    @classmethod
+    def normalize_feedback(cls, value: str) -> str:
+        return _normalize_required_text(value)
 
 
 class SkillScore(BaseModel):
@@ -385,6 +212,11 @@ class SkillScore(BaseModel):
     rationale: str = Field(min_length=1, max_length=1_500)
     confidence: int = Field(ge=0, le=100)
 
+    @field_validator("label", "rationale")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _normalize_required_text(value)
+
 
 class ImprovementSuggestion(BaseModel):
     priority: Literal["high", "medium", "low"]
@@ -393,20 +225,18 @@ class ImprovementSuggestion(BaseModel):
     description: str = Field(min_length=1, max_length=1_500)
     action_steps: list[str] = Field(min_length=1, max_length=6)
 
+    @field_validator("title", "description")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return _normalize_required_text(value)
 
-class ChecklistCriterionResult(BaseModel):
-    criterion_id: ChecklistCriterionId
-    label: str = Field(min_length=1, max_length=180)
-    status: Literal["met", "not_met", "not_observed"]
-    rationale: str = Field(min_length=1, max_length=1_000)
-
-
-class ChecklistSectionResult(BaseModel):
-    competency: CompetencyId
-    label: str = Field(min_length=1, max_length=80)
-    score: int = Field(ge=0, le=100)
-    status: Literal["mastered", "needs_improvement", "not_observed"]
-    criteria: list[ChecklistCriterionResult] = Field(min_length=3, max_length=3)
+    @field_validator("action_steps")
+    @classmethod
+    def normalize_steps(cls, values: list[str]) -> list[str]:
+        normalized = [" ".join(value.split()) for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("suggestion action steps cannot be blank")
+        return normalized
 
 
 class AssessmentEvaluation(BaseModel):
@@ -414,10 +244,11 @@ class AssessmentEvaluation(BaseModel):
     question_feedback: list[QuestionFeedback] = Field(min_length=10, max_length=10)
     skill_scores: list[SkillScore] = Field(min_length=6, max_length=6)
     suggestions: list[ImprovementSuggestion] = Field(min_length=2, max_length=6)
-    checklist_sections: list[ChecklistSectionResult] = Field(
-        min_length=6,
-        max_length=6,
-    )
+
+    @field_validator("summary")
+    @classmethod
+    def normalize_summary(cls, value: str) -> str:
+        return _normalize_required_text(value)
 
     @model_validator(mode="after")
     def require_fixed_result_sets(self) -> Self:
@@ -431,17 +262,20 @@ class AssessmentEvaluation(BaseModel):
             COMPETENCY_IDS,
             "skill scores",
         )
-        _require_exact_ids(
-            [item.competency for item in self.checklist_sections],
-            COMPETENCY_IDS,
-            "checklist sections",
+        question_order = {
+            question_id: index for index, question_id in enumerate(QUESTION_IDS)
+        }
+        competency_order = {
+            competency: index for index, competency in enumerate(COMPETENCY_IDS)
+        }
+        self.question_feedback.sort(
+            key=lambda item: question_order[item.question_id]
         )
-        for section in self.checklist_sections:
-            _require_exact_ids(
-                [item.criterion_id for item in section.criteria],
-                CHECKLIST_IDS_BY_COMPETENCY[section.competency],
-                f"{section.competency} checklist",
-            )
+        self.skill_scores.sort(
+            key=lambda item: competency_order[item.competency]
+        )
+        for item in self.skill_scores:
+            item.label = COMPETENCY_LABELS[item.competency]
         return self
 
 
@@ -451,10 +285,17 @@ class PracticalAssessment(BaseModel):
     questionnaire_version: str
     status: AssessmentStatus
     video_status: VideoStatus
-    video_file_name: str | None
-    video_mime_type: str | None
-    video_size_bytes: int | None = Field(default=None, ge=0)
-    video_sha256: str | None
+    # Required internally for resumable private Storage access. Never serialize
+    # the bucket object key into a browser-facing API response.
+    video_object_path: str = Field(min_length=1, max_length=1_024, exclude=True)
+    video_file_name: str = Field(min_length=1, max_length=255)
+    video_mime_type: Literal["video/mp4", "video/mov", "video/webm"]
+    video_size_bytes: int = Field(gt=0, le=100_000_000)
+    video_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    questions: list[AssessmentQuestionDefinition] = Field(
+        min_length=10,
+        max_length=10,
+    )
     video_analysis: StoredVideoAnalysis | None
     answers: list[AssessmentAnswer] = Field(min_length=10, max_length=10)
     safety_procedures_score: int | None = Field(default=None, ge=0, le=100)
@@ -467,20 +308,50 @@ class PracticalAssessment(BaseModel):
     grade: Literal["A", "B", "C", "D", "F"] | None = None
     passed: bool | None = None
     evaluation: AssessmentEvaluation | None
-    personalization_context: str | None = Field(default=None, max_length=4_000)
     revision: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
 
+    @field_validator("video_object_path")
+    @classmethod
+    def validate_video_object_path(cls, value: str) -> str:
+        parts = value.split("/")
+        if (
+            value.startswith("/")
+            or value.endswith("/")
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("invalid private video object path")
+        return value
+
+    @field_validator("video_file_name")
+    @classmethod
+    def normalize_video_file_name(cls, value: str) -> str:
+        return _normalize_required_text(value)
+
     @model_validator(mode="after")
     def require_valid_row_state(self) -> Self:
+        _validate_question_set(self.questions)
         _require_exact_ids(
             [answer.question_id for answer in self.answers],
             QUESTION_IDS,
             "stored answers",
         )
+        if self.video_status == "answers_generated" and self.video_analysis is None:
+            raise ValueError("generated video answers are missing")
+        if (
+            self.video_status == "questions_generated"
+            and self.video_analysis is not None
+        ):
+            raise ValueError("video analysis exists before answers were generated")
+        if self.status == "draft" and self.completed_at is not None:
+            raise ValueError("a draft assessment cannot have a completion time")
         if self.status == "completed":
+            if self.video_status != "answers_generated":
+                raise ValueError("completed assessment has no generated answers")
+            if any(answer.answer is None for answer in self.answers):
+                raise ValueError("completed assessment answers are incomplete")
             required = (
                 self.safety_procedures_score,
                 self.tool_usage_score,
@@ -492,7 +363,6 @@ class PracticalAssessment(BaseModel):
                 self.grade,
                 self.passed,
                 self.evaluation,
-                self.personalization_context,
                 self.completed_at,
             )
             if any(value is None for value in required):
@@ -503,7 +373,37 @@ class PracticalAssessment(BaseModel):
 class PracticalAssessmentResponse(BaseModel):
     assessment: PracticalAssessment | None
     questions: list[AssessmentQuestionDefinition]
-    checklist_definitions: list[ChecklistSectionDefinition]
+
+
+class PracticalAssessmentHistoryItem(BaseModel):
+    """Compact completed-assessment data for dashboards and history lists."""
+
+    id: UUID
+    video_file_name: str = Field(min_length=1, max_length=255)
+    overall_score: int = Field(ge=0, le=100)
+    grade: Literal["A", "B", "C", "D", "F"]
+    passed: bool
+    safety_procedures_score: int = Field(ge=0, le=100)
+    tool_usage_score: int = Field(ge=0, le=100)
+    technical_knowledge_score: int = Field(ge=0, le=100)
+    work_quality_score: int = Field(ge=0, le=100)
+    testing_verification_score: int = Field(ge=0, le=100)
+    documentation_score: int = Field(ge=0, le=100)
+    created_at: datetime
+    completed_at: datetime
+
+    @field_validator("video_file_name")
+    @classmethod
+    def normalize_history_video_file_name(cls, value: str) -> str:
+        return _normalize_required_text(value)
+
+
+class PracticalAssessmentHistoryResponse(BaseModel):
+    assessments: list[PracticalAssessmentHistoryItem]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
+    has_more: bool
 
 
 def assessment_response(
@@ -511,9 +411,25 @@ def assessment_response(
 ) -> PracticalAssessmentResponse:
     return PracticalAssessmentResponse(
         assessment=assessment,
-        questions=list(FIXED_QUESTIONS),
-        checklist_definitions=list(FIXED_CHECKLIST),
+        questions=list(assessment.questions) if assessment else [],
     )
+
+
+def _validate_question_set(
+    questions: list[AssessmentQuestionDefinition],
+) -> None:
+    _require_exact_ids(
+        [question.id for question in questions],
+        QUESTION_IDS,
+        "assessment questions",
+    )
+    competencies = {question.competency for question in questions}
+    missing = set(COMPETENCY_IDS) - competencies
+    if missing:
+        raise ValueError("assessment questions must cover all six competencies")
+    prompts = [question.prompt.casefold() for question in questions]
+    if len(prompts) != len(set(prompts)):
+        raise ValueError("assessment question prompts must be unique")
 
 
 def _require_exact_ids(

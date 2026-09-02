@@ -1,8 +1,8 @@
-import asyncio
 from functools import lru_cache
 from typing import Protocol
 
 from app.core.config import get_settings
+from app.services.gemini_fallback import generate_content_with_fallback
 
 
 class LLMProviderError(RuntimeError):
@@ -28,6 +28,7 @@ class GeminiLLMClient:
 
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.gemini_generation_model
+        self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_generation_max_output_tokens
         self._max_retries = settings.gemini_generation_max_retries
 
@@ -64,25 +65,17 @@ class GeminiLLMClient:
     async def _generate_with_retry(
         self, contents: list[object], config: object
     ) -> object:
-        for attempt in range(self._max_retries):
-            try:
-                return await self._client.aio.models.generate_content(
-                    model=self._model,
-                    contents=contents,
-                    config=config,
-                )
-            except Exception as exc:
-                if attempt == self._max_retries - 1 or not self._is_retryable(exc):
-                    raise LLMProviderError("Gemini inference request failed") from exc
-                await asyncio.sleep(min(2**attempt, 8))
-        raise LLMProviderError("Gemini inference request exhausted its retries")
-
-    @staticmethod
-    def _is_retryable(exc: Exception) -> bool:
-        status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-        if isinstance(status, int):
-            return status == 408 or status == 429 or status >= 500
-        return isinstance(exc, (ConnectionError, TimeoutError))
+        try:
+            return await generate_content_with_fallback(
+                models=self._client.aio.models,
+                primary_model=self._model,
+                fallback_models=self._fallback_models,
+                contents=contents,
+                config=config,
+                attempts_per_model=self._max_retries,
+            )
+        except Exception as exc:
+            raise LLMProviderError("Gemini inference request failed") from exc
 
     async def close(self) -> None:
         await self._client.aio.aclose()

@@ -17,12 +17,6 @@ from app.schemas.conversations import (
     SendConversationMessageResponse,
 )
 from app.services.chat import ChatService, get_chat_service
-from app.services.practical_assessments import (
-    PracticalAssessmentConfigurationError,
-    PracticalAssessmentProviderError,
-    SupabasePracticalAssessmentRepository,
-    get_practical_assessment_repository,
-)
 
 
 class ConversationConfigurationError(RuntimeError):
@@ -383,12 +377,10 @@ class ConversationService:
         repository: SupabaseConversationRepository,
         context_message_limit: int,
         chat_service: ChatService | None = None,
-        assessment_repository: SupabasePracticalAssessmentRepository | None = None,
     ) -> None:
         self._repository = repository
         self._chat_service = chat_service
         self._context_message_limit = context_message_limit
-        self._assessment_repository = assessment_repository
 
     async def list_conversations(
         self, user: AuthenticatedUser
@@ -479,7 +471,6 @@ class ConversationService:
             )
 
         chat_service = self._chat_service or get_chat_service()
-        learner_context = await self._get_learner_context(user)
         generated: ChatResponse = await chat_service.generate(
             message=message,
             conversation_id=conversation_id,
@@ -487,7 +478,6 @@ class ConversationService:
                 Message(role=history_message.role, content=history_message.content)
                 for history_message in recent_messages
             ],
-            learner_context=learner_context,
         )
         assistant_message = await self._repository.create_message(
             conversation_id=conversation_id,
@@ -503,26 +493,6 @@ class ConversationService:
             assistant_message=assistant_message,
             sources=generated.sources,
         )
-
-    async def _get_learner_context(
-        self,
-        user: AuthenticatedUser,
-    ) -> str | None:
-        if self._assessment_repository is None:
-            return None
-        try:
-            return await self._assessment_repository.get_personalization_context(
-                user_id=user.id,
-                access_token=user.access_token,
-            )
-        except (
-            PracticalAssessmentConfigurationError,
-            PracticalAssessmentProviderError,
-        ):
-            # Personalization is optional. A storage outage or unapplied
-            # migration must not make the safety-focused RAG chat unavailable.
-            return None
-
 
 def _is_default_title(title: str) -> bool:
     return title.strip().casefold() in {
@@ -560,7 +530,6 @@ def get_conversation_service() -> ConversationService:
     return ConversationService(
         repository=get_conversation_repository(),
         context_message_limit=settings.chat_history_message_limit,
-        assessment_repository=get_practical_assessment_repository(),
     )
 
 

@@ -1,6 +1,5 @@
 """Gemini-powered, safety-focused analysis of electrical wiring photos."""
 
-import asyncio
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,7 +8,9 @@ from typing import Protocol
 from uuid import uuid4
 
 from app.core.config import get_settings
+from app.core.language import ai_language_instruction, get_response_language
 from app.schemas.photo_analysis import PhotoAnalysisFindings, PhotoAnalysisResponse
+from app.services.gemini_fallback import generate_content_with_fallback
 
 SUPPORTED_IMAGE_MIME_TYPES = frozenset(
     {
@@ -29,6 +30,14 @@ SAFE_ISOLATION_NOTICE = (
 PHOTO_LIMITATION_NOTICE = (
     "A photo-only assessment cannot confirm that the installation is fault-free, "
     "safe, or de-energized."
+)
+SAFE_ISOLATION_NOTICE_BN = (
+    "বিদ্যুৎ চালু থাকা অবস্থায় কোনো যন্ত্রে কাজ করবেন না। একজন যোগ্য ব্যক্তিকে দিয়ে "
+    "বিদ্যুৎ সরবরাহ বিচ্ছিন্ন ও লকআউট/ট্যাগআউট করান, তারপর পরিদর্শন বা মেরামতের আগে "
+    "উপযুক্ত রেটিংয়ের টেস্টার দিয়ে ভোল্টেজ নেই তা যাচাই করুন।"
+)
+PHOTO_LIMITATION_NOTICE_BN = (
+    "শুধু একটি ছবি দেখে স্থাপনাটি ত্রুটিমুক্ত, নিরাপদ বা বিদ্যুৎবিচ্ছিন্ন—এটি নিশ্চিত করা যায় না।"
 )
 
 VISION_SYSTEM_INSTRUCTION = """
@@ -116,6 +125,7 @@ class GeminiPhotoAnalyzer:
         settings = get_settings()
         self._api_key = settings.gemini_api_key
         self._model = settings.gemini_vision_model
+        self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_vision_max_output_tokens
         self._max_retries = settings.gemini_generation_max_retries
         self._client: object | None = None
@@ -141,7 +151,10 @@ class GeminiPhotoAnalyzer:
             types.Part.from_text(text=VISION_USER_PROMPT),
         ]
         config = types.GenerateContentConfig(
-            system_instruction=VISION_SYSTEM_INSTRUCTION,
+            system_instruction=(
+                f"{VISION_SYSTEM_INSTRUCTION}\n\n"
+                f"{ai_language_instruction(structured=True)}"
+            ),
             max_output_tokens=self._max_output_tokens,
             response_mime_type="application/json",
             response_schema=PhotoAnalysisFindings,
@@ -166,32 +179,19 @@ class GeminiPhotoAnalyzer:
         self, contents: list[object], config: object
     ) -> object:
         client = self._get_client()
-        for attempt in range(self._max_retries):
-            try:
-                return await client.aio.models.generate_content(
-                    model=self._model,
-                    contents=contents,
-                    config=config,
-                )
-            except Exception as exc:
-                if (
-                    attempt == self._max_retries - 1
-                    or not self._is_retryable(exc)
-                ):
-                    raise PhotoAnalysisProviderError(
-                        "Gemini image-analysis request failed"
-                    ) from exc
-                await asyncio.sleep(min(2**attempt, 8))
-        raise PhotoAnalysisProviderError(
-            "Gemini image-analysis request exhausted its retries"
-        )
-
-    @staticmethod
-    def _is_retryable(exc: Exception) -> bool:
-        status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-        if isinstance(status, int):
-            return status == 408 or status == 429 or status >= 500
-        return isinstance(exc, (ConnectionError, TimeoutError))
+        try:
+            return await generate_content_with_fallback(
+                models=client.aio.models,
+                primary_model=self._model,
+                fallback_models=self._fallback_models,
+                contents=contents,
+                config=config,
+                attempts_per_model=self._max_retries,
+            )
+        except Exception as exc:
+            raise PhotoAnalysisProviderError(
+                "Gemini image-analysis request failed"
+            ) from exc
 
     async def close(self) -> None:
         if self._client is None:
@@ -222,12 +222,17 @@ def _enforce_safety_language(
     """Add deterministic safety boundaries around probabilistic model text."""
 
     update: dict[str, object] = {}
+    bangla = get_response_language() == "bn"
+    isolation_notice = SAFE_ISOLATION_NOTICE_BN if bangla else SAFE_ISOLATION_NOTICE
+    limitation_notice = (
+        PHOTO_LIMITATION_NOTICE_BN if bangla else PHOTO_LIMITATION_NOTICE
+    )
     if findings.outcome == "faults_detected" and findings.primary_fault:
         warning = findings.primary_fault.safety_warning.strip()
         update["primary_fault"] = findings.primary_fault.model_copy(
             update={
                 "safety_warning": _join_with_limit(
-                    SAFE_ISOLATION_NOTICE,
+                    isolation_notice,
                     warning,
                     max_length=1_500,
                     preserve_second=False,
@@ -237,7 +242,7 @@ def _enforce_safety_language(
     elif findings.outcome in {"no_visible_faults", "insufficient_image"}:
         update["summary"] = _join_with_limit(
             findings.summary.rstrip(),
-            PHOTO_LIMITATION_NOTICE,
+            limitation_notice,
             max_length=2_000,
             preserve_second=True,
         )

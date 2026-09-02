@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.language import ResponseLanguageMiddleware
 from app.services.chat_history import close_chat_history_service
 from app.services.conversations import close_conversation_repository
 from app.services.llm import close_llm_client
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(ResponseLanguageMiddleware)
     application.include_router(api_router, prefix=settings.api_v1_prefix)
 
     @application.exception_handler(Exception)

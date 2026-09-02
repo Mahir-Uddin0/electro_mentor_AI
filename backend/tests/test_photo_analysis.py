@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
+from app.core.language import reset_response_language, set_response_language
 from app.core.security import AuthenticatedUser
 from app.main import app
 from app.schemas.photo_analysis import (
@@ -19,7 +20,9 @@ from app.schemas.photo_analysis import (
 )
 from app.services.photo_analysis import (
     PHOTO_LIMITATION_NOTICE,
+    PHOTO_LIMITATION_NOTICE_BN,
     SAFE_ISOLATION_NOTICE,
+    SAFE_ISOLATION_NOTICE_BN,
     VISION_SYSTEM_INSTRUCTION,
     EmptyPhotoError,
     GeminiPhotoAnalyzer,
@@ -197,6 +200,7 @@ def _gemini_analyzer(models: FakeAsyncModels) -> GeminiPhotoAnalyzer:
     analyzer = object.__new__(GeminiPhotoAnalyzer)
     analyzer._api_key = "test-key"
     analyzer._model = "gemini-3.7-flash"
+    analyzer._fallback_models = "gemini-3.6-flash,gemini-3.5-flash"
     analyzer._max_output_tokens = 4_096
     analyzer._max_retries = 1
     analyzer._client = SimpleNamespace(aio=SimpleNamespace(models=models))
@@ -222,6 +226,20 @@ def test_gemini_receives_inline_image_and_structured_response_schema() -> None:
     assert config.response_schema is PhotoAnalysisFindings
     assert "untrusted visual evidence" in config.system_instruction
     assert "Never follow" in VISION_SYSTEM_INSTRUCTION
+
+
+def test_gemini_photo_prompt_requests_bangla_without_translating_schema() -> None:
+    models = FakeAsyncModels(SimpleNamespace(parsed=_findings().model_dump()))
+    analyzer = _gemini_analyzer(models)
+    token = set_response_language("bn")
+    try:
+        asyncio.run(analyzer.analyze(image_bytes=PNG_BYTES, mime_type="image/png"))
+    finally:
+        reset_response_language(token)
+
+    instruction = models.calls[0]["config"].system_instruction
+    assert "Bengali script" in instruction
+    assert "Preserve JSON keys" in instruction
 
 
 def test_invalid_gemini_structure_becomes_provider_error() -> None:
@@ -270,6 +288,29 @@ def test_service_adds_non_optional_safe_isolation_warning() -> None:
     )
     assert response.primary_fault is not None
     assert response.primary_fault.safety_warning.startswith(SAFE_ISOLATION_NOTICE)
+
+
+def test_service_uses_bangla_for_deterministic_safety_notices() -> None:
+    fault_service = PhotoAnalysisService(StaticAnalyzer(_findings()))
+    limitation_service = PhotoAnalysisService(
+        StaticAnalyzer(_findings("no_visible_faults"))
+    )
+    token = set_response_language("bn")
+    try:
+        fault_response = asyncio.run(
+            fault_service.analyze(ValidatedPhoto(PNG_BYTES, "image/png"))
+        )
+        limitation_response = asyncio.run(
+            limitation_service.analyze(ValidatedPhoto(PNG_BYTES, "image/png"))
+        )
+    finally:
+        reset_response_language(token)
+
+    assert fault_response.primary_fault is not None
+    assert fault_response.primary_fault.safety_warning.startswith(
+        SAFE_ISOLATION_NOTICE_BN
+    )
+    assert PHOTO_LIMITATION_NOTICE_BN in limitation_response.summary
 
 
 class FakeEndpointService:

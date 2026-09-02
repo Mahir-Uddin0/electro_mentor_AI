@@ -26,7 +26,7 @@ api_router.include_router(
 api_router.include_router(
     practical_assessments.router,
     prefix="/practical-assessments",
-    tags=["learner profile"],
+    tags=["practical assessments"],
 )
 api_router.include_router(
     safety_checklists.router,

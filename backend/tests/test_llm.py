@@ -21,6 +21,7 @@ def make_client(models: FakeAsyncModels) -> GeminiLLMClient:
     client = object.__new__(GeminiLLMClient)
     client._client = SimpleNamespace(aio=SimpleNamespace(models=models))
     client._model = "gemini-3.7-flash"
+    client._fallback_models = "gemini-3.6-flash,gemini-3.5-flash"
     client._max_output_tokens = 2_048
     client._max_retries = 1
     return client

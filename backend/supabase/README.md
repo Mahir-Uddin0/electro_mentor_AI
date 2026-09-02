@@ -75,12 +75,23 @@ returned by workflow section, priority (`high`, `medium`, `low`), and due date.
 If FastAPI reports that the task table is missing, run `tasks.sql` in the same
 Supabase project referenced by `SUPABASE_URL`.
 
-## One-time practical assessment
+## One-time learner-profile assessment
 
-Run [practical_assessment.sql](./practical_assessment.sql) once in **Supabase
-Dashboard -> SQL Editor**. It creates the singleton `practical_assessments` row
-for each authenticated user, its ownership policy, immutable-completion trigger,
-JSON constraints, indexes, and restricted grants.
+Run the current [practical_assessment.sql](./practical_assessment.sql) in
+**Supabase Dashboard -> SQL Editor**. Run it again if you previously installed
+the older practical/work-assessment schema: the updated SQL is also the v2
+migration. It creates one active `practical_assessments` learner-profile row per
+authenticated user, its ownership policy, immutable-completion trigger, strict
+ten-answer JSON constraints, and restricted grants.
+
+The v2 profile intentionally has no `topic` or `project_name`. During an upgrade,
+the migration copies every incompatible v1 row to
+`practical_assessment_legacy_archive` as a complete JSON snapshot before removing
+that row from the active table. The archived table has no browser policy and the
+server role has read-only access. The user's active singleton slot is therefore
+available for the new profile without silently losing or reinterpreting the old
+work-assessment record. Supabase administrators can inspect the archive in the
+SQL Editor if necessary.
 
 The assessment backend uses the publishable key plus the user's JWT for RLS
 reads. Trusted draft and evaluation writes use a server-only Supabase secret:
@@ -99,17 +110,22 @@ API Keys**, then place it only in `backend/.env`.
 The authenticated endpoints are:
 
 - `GET /api/v1/practical-assessments/me`
-- `POST /api/v1/practical-assessments` (multipart topic, project name, and an
-  optional MP4/MOV/WebM video)
+- `POST /api/v1/practical-assessments` (an optional MP4/MOV/WebM video)
 - `PUT /api/v1/practical-assessments/{assessment_id}/answers`
 - `POST /api/v1/practical-assessments/{assessment_id}/evaluate`
 
-The API always returns the user's nullable assessment together with the fixed
-ten-question questionnaire and fixed six-section/eighteen-item checklist. A
-video-analysis failure leaves a usable draft with `video_status=failed`, so all
-answers can still be completed manually. Evaluation permanently completes the
-one-time record; its compact competency context is then used only to personalize
-future RAG explanations and never to relax electrical-safety guidance.
+The API always returns the user's nullable profile together with ten fixed
+questions about their electrical experience, training, familiar systems, safety
+and work habits, tools, troubleshooting approach, confidence, support needs, and
+learning preferences. Gemini may suggest only answers supported by the optional
+video. Unsupported answers remain empty; the user can fill them and edit every
+AI suggestion. Draft answers and their AI provenance are stored in Supabase, and
+all ten final answers must be non-empty before the one-time profile can be
+completed. A video-analysis failure still leaves a usable manual draft.
+
+Once completed, the answer-derived profile and structured result are immutable.
+The backend uses their bounded personalization context to tailor later RAG
+explanations; it does not use the profile to weaken electrical-safety guidance.
 
 Uploaded videos are streamed through a temporary backend file and sent to
 Gemini's Files API. The local copy is removed after the request, and the backend

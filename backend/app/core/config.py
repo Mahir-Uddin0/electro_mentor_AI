@@ -44,11 +44,20 @@ class Settings(BaseSettings):
         default="practical_assessments",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    supabase_practical_assessment_videos_bucket: str = Field(
+        default="practical-assessment-videos",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
     supabase_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     gemini_api_key: str | None = None
     gemini_generation_model: str = "gemini-3.7-flash"
+    # Ordered from stronger to smaller. A primary model already in this list
+    # starts at its own position and never falls back upward.
+    gemini_fallback_models: str = (
+        "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite"
+    )
     gemini_generation_max_output_tokens: int = Field(default=2_048, ge=1, le=65_536)
     gemini_generation_max_retries: int = Field(default=3, ge=1, le=6)
     gemini_vision_model: str = "gemini-3.7-flash"
@@ -75,7 +84,12 @@ class Settings(BaseSettings):
     practical_assessment_max_video_bytes: int = Field(
         default=100_000_000,
         ge=1,
-        le=2_000_000_000,
+        le=100_000_000,
+    )
+    practical_assessment_storage_timeout_seconds: float = Field(
+        default=300,
+        gt=0,
+        le=1_800,
     )
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=768, le=768)
