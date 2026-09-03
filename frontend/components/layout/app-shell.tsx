@@ -7,6 +7,7 @@ import {
   BookOpen,
   Bot,
   Camera,
+  Check,
   CheckSquare,
   Download,
   Grid2X2,
@@ -24,6 +25,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Brand } from "@/components/brand";
 import { useLanguage } from "@/components/language-provider";
+import type { PwaInstallPromptEvent } from "@/components/pwa/service-worker-registrar";
 
 const navigation = [
   { label: "Dashboard", href: "/dashboard", icon: Grid2X2 },
@@ -52,6 +54,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { language, setLanguage, t } = useLanguage();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<PwaInstallPromptEvent | null>(null);
+  const [appInstalled, setAppInstalled] = useState(false);
   const [title, subtitle] = useMemo(() => getRouteTitle(pathname, t), [pathname, t]);
 
   useEffect(() => setMobileOpen(false), [pathname]);
@@ -63,6 +67,53 @@ export function AppShell({ children }: { children: ReactNode }) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
   }, [loading, configured, session, previewMode, pathname, router]);
+  useEffect(() => {
+    const iosNavigator = navigator as Navigator & { standalone?: boolean };
+    setAppInstalled(
+      window.matchMedia("(display-mode: standalone)").matches ||
+        iosNavigator.standalone === true,
+    );
+
+    const captureInstallPrompt = () => {
+      setInstallPrompt(window.electroMentorInstallPrompt ?? null);
+    };
+    const markInstalled = () => {
+      setAppInstalled(true);
+      setInstallPrompt(null);
+    };
+
+    captureInstallPrompt();
+    window.addEventListener("electromentor-install-ready", captureInstallPrompt);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => {
+      window.removeEventListener("electromentor-install-ready", captureInstallPrompt);
+      window.removeEventListener("appinstalled", markInstalled);
+    };
+  }, []);
+
+  async function installApp() {
+    if (appInstalled) return;
+    const manualInstructions =
+      language === "bn"
+        ? "ব্রাউজারের মেনু থেকে ‘Install app’ নির্বাচন করুন। iPhone বা iPad-এ Share > Add to Home Screen নির্বাচন করুন।"
+        : "Choose ‘Install app’ from your browser menu. On iPhone or iPad, choose Share > Add to Home Screen.";
+    if (!installPrompt) {
+      window.alert(manualInstructions);
+      return;
+    }
+
+    try {
+      await installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      window.electroMentorInstallPrompt = undefined;
+      setInstallPrompt(null);
+      if (outcome === "accepted") setAppInstalled(true);
+    } catch {
+      window.electroMentorInstallPrompt = undefined;
+      setInstallPrompt(null);
+      window.alert(manualInstructions);
+    }
+  }
 
   if (loading || (configured && !session && !previewMode)) {
     return <div className="full-loader"><span className="spinner" /> {t("Securing your workspace…")}</div>;
@@ -127,7 +178,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </label>
           <div className="topbar-actions">
             <button className="icon-button desktop-only" aria-label={t("Language")} onClick={() => setLanguage(language === "en" ? "bn" : "en")}><Languages size={18} /></button>
-            <button className="install-button desktop-only"><Download size={16} /> {t("Install")}</button>
+            <button className="install-button desktop-only" type="button" onClick={() => void installApp()} disabled={appInstalled}>
+              {appInstalled ? <Check size={16} /> : <Download size={16} />} {appInstalled ? (language === "bn" ? "ইনস্টল করা আছে" : "Installed") : t("Install")}
+            </button>
             <button className="icon-button notification" aria-label={t("Notifications")}><Bell size={18} /><i>3</i></button>
             <span className="top-avatar">{displayName.slice(0, 1).toUpperCase()}</span>
           </div>
