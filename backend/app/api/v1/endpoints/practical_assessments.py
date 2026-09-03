@@ -90,11 +90,13 @@ async def list_my_practical_assessment_history(
             offset=offset,
             has_more=offset + len(assessments) < total,
         )
-    except (
-        PracticalAssessmentConfigurationError,
-        PracticalAssessmentProviderError,
-    ) as exc:
+    except PracticalAssessmentConfigurationError as exc:
         raise _translate_provider_error(exc) from exc
+    except PracticalAssessmentProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Assessment history is temporarily unavailable. Please try again shortly.",
+        ) from exc
 
 
 @router.get(
