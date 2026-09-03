@@ -77,6 +77,37 @@ The six profile screens share one provider, so a draft can move between the ques
 
 The remaining temporary frontend contract expects `GET /dashboard` and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
 
+## Progressive Web App
+
+Production builds include a native web app manifest and service worker, so the
+frontend can be installed in standalone mode from supported Android, iOS, and
+desktop browsers. Service workers and installation require HTTPS in production;
+`localhost` is treated as a secure context for local testing. The service worker
+registers only in a production build, so test it with:
+
+```bash
+npm run build
+npm run start
+```
+
+The offline cache contains only the `/offline` fallback, the manifest, PWA icons,
+and the hashed Next.js static files required to render that fallback. API
+responses, Supabase sessions or tokens, user data, conversations, AI responses,
+uploaded media, and analysis results are intentionally never cached. AI chat,
+photo review, authentication, database operations, and all mutations remain
+online-only.
+
+The current install icons are brand-colored placeholders in
+`public/icons/icon-192.png` and `public/icons/icon-512.png`; their editable source
+is `public/icons/icon-source.svg`. Replace the PNG files with final artwork while
+keeping the same names and exact dimensions (and keeping important content inside
+the platform-safe center area).
+
+When intentionally changing precached resources or service-worker cache behavior,
+increment `CACHE_NAME` in `public/service-worker.js` (for example,
+`electromentor-v1` to `electromentor-v2`). Activation removes older
+`electromentor-*` caches.
+
 ## Product routes
 
 1. `/login`

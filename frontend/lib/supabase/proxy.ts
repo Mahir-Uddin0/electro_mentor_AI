@@ -22,6 +22,14 @@ function isPublicPath(pathname: string) {
   );
 }
 
+function isPwaResource(pathname: string) {
+  return (
+    pathname === "/offline" ||
+    pathname === "/manifest.webmanifest" ||
+    pathname === "/service-worker.js"
+  );
+}
+
 function redirectWithCookies(url: URL, source: NextResponse) {
   const redirect = NextResponse.redirect(url);
   source.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie));
@@ -30,7 +38,8 @@ function redirectWithCookies(url: URL, source: NextResponse) {
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
-  if (!configured) return response;
+  const { pathname } = request.nextUrl;
+  if (!configured || isPwaResource(pathname)) return response;
 
   const supabase = createServerClient(supabaseUrl!, publishableKey!, {
     cookies: {
@@ -49,8 +58,6 @@ export async function updateSession(request: NextRequest) {
 
   const { data, error } = await supabase.auth.getClaims();
   const authenticated = !error && Boolean(data?.claims?.sub);
-  const { pathname } = request.nextUrl;
-
   if (!authenticated && !isPublicPath(pathname) && !previewAllowed) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";

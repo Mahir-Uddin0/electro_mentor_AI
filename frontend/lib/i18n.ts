@@ -599,6 +599,7 @@ const bangla: Record<string, string> = {
   "The passwords do not match.": "পাসওয়ার্ড দুটি মিলছে না।",
   "Your full name": "আপনার পূর্ণ নাম",
   "Your session expired. Please sign in again.": "আপনার সেশনের মেয়াদ শেষ হয়েছে। আবার সাইন ইন করুন।",
+  "You’re offline. Online features such as AI chat and photo review are unavailable.": "আপনি অফলাইনে আছেন। এআই চ্যাট ও ছবি পর্যালোচনার মতো অনলাইন সুবিধা এখন পাওয়া যাচ্ছে না।",
   "The request could not be completed.": "অনুরোধটি সম্পন্ন করা যায়নি।",
   "Choose an MP4, MOV, or WebM video.": "একটি MP4, MOV বা WebM ভিডিও নির্বাচন করুন।",
   "The video must be 100 MB or smaller.": "ভিডিওটি ১০০ এমবি বা তার কম হতে হবে।",
