@@ -71,7 +71,7 @@ The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
 - `GET /tasks` and `POST /tasks`
 - `PATCH /tasks/{task_id}` and `DELETE /tasks/{task_id}`
 
-Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in Supabase through FastAPI.
+Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in the backend's local SQLite database through FastAPI.
 
 The one-time learner-profile questionnaire uses authenticated FastAPI routes under `/api/v1`:
 

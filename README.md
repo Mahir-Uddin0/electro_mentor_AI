@@ -101,19 +101,44 @@ Send the access JWT to protected backend endpoints with:
 Authorization: Bearer <backend-access-token>
 ```
 
+### Local SQLite task tracker
+
+The authenticated task API now stores task data in the same local SQLite
+database as authentication. FastAPI creates the `tasks` table, constraints,
+ownership index, foreign key, and status-transition trigger at startup; no
+separate SQL migration command or Supabase task configuration is required.
+
+Every task query combines the requested task ID with the authenticated user's
+ID from the backend JWT. As a result, users can list and mutate only their own
+tasks, and another user's task is returned as `404 Not Found` rather than being
+revealed. Deleting a user also deletes that user's tasks through the database
+foreign key.
+
+The endpoints remain unchanged:
+
+```text
+GET    /api/v1/tasks
+POST   /api/v1/tasks
+PATCH  /api/v1/tasks/{task_id}
+DELETE /api/v1/tasks/{task_id}
+```
+
+Task status advances from `upcoming` to `in_progress` to `completed`. The
+service validates transitions and the SQLite trigger enforces the same rule at
+the database boundary. Active tasks are ordered by priority and due date.
+
 ### Temporary Supabase-backed feature data
 
-Conversations, tasks, and practical-assessment persistence have not moved to
-SQLite yet. Their existing Supabase schemas and settings remain temporarily
-while those features are migrated sequentially. Locally issued JWTs are not
-Supabase access tokens, so calls from those feature services to Supabase will
-not satisfy the existing RLS policies during this transition.
+Conversations and practical-assessment persistence have not moved to SQLite
+yet. Their existing Supabase schemas and settings remain temporarily while
+those features are migrated sequentially. Locally issued JWTs are not Supabase
+access tokens, so calls from those feature services to Supabase will not satisfy
+the existing RLS policies during this transition.
 
 Run `backend/supabase/chat_messages.sql` in the Supabase SQL editor. It creates
 the named-conversation and ordered-message tables, upgrades any rows from the
 old flat history schema, and installs ownership constraints, indexes, grants,
 triggers, and Row Level Security policies. Also run
-`backend/supabase/tasks.sql` for the task tracker and
 `backend/supabase/practical_assessment.sql` for each user's one-time learner
 profile. Then configure `backend/.env`:
 
@@ -125,7 +150,6 @@ SUPABASE_API_KEY=your-publishable-or-anon-key
 SUPABASE_SECRET_KEY=your-sb_secret-key-or-legacy-service-role-jwt
 SUPABASE_CONVERSATIONS_TABLE=conversations
 SUPABASE_CHAT_MESSAGES_TABLE=chat_messages
-SUPABASE_TASKS_TABLE=tasks
 SUPABASE_PRACTICAL_ASSESSMENTS_TABLE=practical_assessments
 CHAT_HISTORY_MESSAGE_LIMIT=7
 ```
@@ -140,10 +164,6 @@ Sending a message stores the user turn, loads only the latest
 seven prior messages from that conversation for Gemini, then stores the grounded
 assistant answer and its RAG citations. Opening a conversation returns its full
 stored history for the frontend.
-
-The authenticated `/api/v1/tasks` endpoints list, create, update, and delete
-only the current user's tasks. Task status advances from `upcoming` to
-`in_progress` to `completed`; active tasks are ordered by priority and due date.
 
 The authenticated `/api/v1/practical-assessments` workflow creates a one-time
 electrical learner profile. It accepts an optional MP4/MOV/WebM introduction
