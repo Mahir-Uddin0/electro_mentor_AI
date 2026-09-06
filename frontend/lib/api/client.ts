@@ -1,7 +1,7 @@
 import {
   getFreshAccessToken,
   invalidateBrowserSession,
-} from "@/lib/supabase/session";
+} from "@/lib/auth/session";
 import { getStoredLanguage, translate } from "@/lib/i18n";
 
 const backendUrl =

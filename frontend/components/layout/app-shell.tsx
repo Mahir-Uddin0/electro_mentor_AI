@@ -50,7 +50,7 @@ function getRouteTitle(pathname: string, t: (text: string) => string) {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { loading, configured, session, previewMode, user, signOut } = useAuth();
+  const { loading, session, previewMode, user, signOut } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(false);
@@ -63,10 +63,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
   }, [dark]);
   useEffect(() => {
-    if (!loading && configured && !session && !previewMode) {
+    if (!loading && !session && !previewMode) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
     }
-  }, [loading, configured, session, previewMode, pathname, router]);
+  }, [loading, session, previewMode, pathname, router]);
   useEffect(() => {
     const iosNavigator = navigator as Navigator & { standalone?: boolean };
     setAppInstalled(
@@ -115,12 +115,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }
 
-  if (loading || (configured && !session && !previewMode)) {
+  if (loading || (!session && !previewMode)) {
     return <div className="full-loader"><span className="spinner" /> {t("Securing your workspace…")}</div>;
   }
 
   const displayName =
-    user?.user_metadata?.full_name ?? user?.email?.split("@")[0] ?? "Prince Jayed Khan";
+    user?.display_name ?? user?.email?.split("@")[0] ?? "Prince Jayed Khan";
 
   return (
     <div className="app-shell">

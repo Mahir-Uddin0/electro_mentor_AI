@@ -2,8 +2,10 @@
 
 This repository contains two applications:
 
-- `frontend/` — the Next.js 16 and React 19 product UI, Supabase browser authentication, and backend API client.
-- `backend/` — the FastAPI, Gemini RAG, Supabase JWT verification, and chat-history service.
+- `frontend/` — the Next.js 16 and React 19 product UI, local authentication
+  session client, and backend API client.
+- `backend/` — the FastAPI, local SQLite authentication, Gemini RAG, and
+  user-owned feature services.
 
 See [`frontend/README.md`](frontend/README.md) for frontend setup, environment variables, and the complete 20-route screen map.
 
@@ -66,7 +68,46 @@ create additional daily quota. Keep these settings below the active limits
 shown for your project in Google AI Studio; if the daily allowance is already
 exhausted, resume ingestion after the provider resets it.
 
-### Supabase authentication and user-owned data
+### Local SQLite authentication
+
+Authentication is owned by FastAPI and stored locally in the `users` and
+`refresh_sessions` SQLite tables. On startup the backend creates
+`data/electromentor.db` and these tables when they do not exist. Configure:
+
+```env
+DATABASE_URL=sqlite:///data/electromentor.db
+AUTH_JWT_SECRET=replace-with-output-from-openssl-rand-hex-32
+AUTH_JWT_ISSUER=electromentor-api
+AUTH_JWT_AUDIENCE=electromentor-web
+AUTH_ACCESS_TOKEN_MINUTES=15
+AUTH_REFRESH_TOKEN_DAYS=14
+```
+
+Generate the secret with `openssl rand -hex 32`. Registration and login return
+a short-lived backend-signed access JWT and an opaque, rotating refresh token.
+Only the refresh token's SHA-256 digest is stored in SQLite. The endpoints are:
+
+```text
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+POST /api/v1/auth/refresh
+POST /api/v1/auth/logout
+GET  /api/v1/auth/me
+```
+
+Send the access JWT to protected backend endpoints with:
+
+```http
+Authorization: Bearer <backend-access-token>
+```
+
+### Temporary Supabase-backed feature data
+
+Conversations, tasks, and practical-assessment persistence have not moved to
+SQLite yet. Their existing Supabase schemas and settings remain temporarily
+while those features are migrated sequentially. Locally issued JWTs are not
+Supabase access tokens, so calls from those feature services to Supabase will
+not satisfy the existing RLS policies during this transition.
 
 Run `backend/supabase/chat_messages.sql` in the Supabase SQL editor. It creates
 the named-conversation and ordered-message tables, upgrades any rows from the
@@ -82,8 +123,6 @@ SUPABASE_API_KEY=your-publishable-or-anon-key
 # Server-only secret key used for trusted profile writes. Never expose it
 # through a NEXT_PUBLIC_* variable.
 SUPABASE_SECRET_KEY=your-sb_secret-key-or-legacy-service-role-jwt
-# Optional: required only if the project still issues legacy HS256 tokens.
-SUPABASE_JWT_SECRET=your-legacy-hs256-jwt-secret
 SUPABASE_CONVERSATIONS_TABLE=conversations
 SUPABASE_CHAT_MESSAGES_TABLE=chat_messages
 SUPABASE_TASKS_TABLE=tasks
@@ -91,22 +130,13 @@ SUPABASE_PRACTICAL_ASSESSMENTS_TABLE=practical_assessments
 CHAT_HISTORY_MESSAGE_LIMIT=7
 ```
 
-Keep `SUPABASE_JWT_SECRET` and `SUPABASE_SECRET_KEY` on the backend only.
-Current ES256/RS256 tokens are
-verified locally with Supabase's cached public JWKS and do not need that secret.
+Keep `SUPABASE_SECRET_KEY` on the backend only.
 `SUPABASE_API_KEY` should be the project's publishable or legacy anon key; the
-backend forwards the verified user access token to the Data API so the user's
-RLS policy remains active.
+backend feature repositories still use the Supabase Data API until their local
+SQLite migration is completed.
 
-All `/api/v1/conversations` endpoints require:
-
-```http
-Authorization: Bearer <supabase-user-access-token>
-```
-
-The JWT signature and its issuer, audience, expiry, role, and subject are
-verified locally. Users can list, create, open, rename, and delete only their
-own conversations. Sending a message stores the user turn, loads only the latest
+Users can list, create, open, rename, and delete only their own conversations.
+Sending a message stores the user turn, loads only the latest
 seven prior messages from that conversation for Gemini, then stores the grounded
 assistant answer and its RAG citations. Opening a conversation returns its full
 stored history for the frontend.

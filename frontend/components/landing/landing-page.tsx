@@ -262,7 +262,7 @@ const COPY: Record<AppLanguage, LandingCopy> = {
         description:
           "Create your own tasks, set priorities, and move work between Upcoming, In Progress, and Completed. Every task is stored for the signed-in user.",
         points: [
-          "User-specific tasks stored in Supabase",
+          "User-specific task workspace",
           "Priority-based sorting for active work",
           "Simple status changes that update the board immediately",
         ],
@@ -281,7 +281,7 @@ const COPY: Record<AppLanguage, LandingCopy> = {
       title: "From sign-in to safer, more reflective practice",
       description: "Choose the tool that fits the job and keep your learning connected in one account.",
       steps: [
-        { title: "Create your workspace", description: "Sign in securely with Supabase and choose Bangla or English." },
+        { title: "Create your workspace", description: "Sign in through the ElectroMentor API and choose Bangla or English." },
         { title: "Use the right tool", description: "Ask a question, upload work evidence, open a guide, or plan a task." },
         { title: "Review and improve", description: "Check evidence, follow safety controls, and retain your progress over time." },
       ],

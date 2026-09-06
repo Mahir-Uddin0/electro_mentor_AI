@@ -9,10 +9,7 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { Brand } from "@/components/brand";
 import { useLanguage } from "@/components/language-provider";
 import { Button } from "@/components/ui";
-import {
-  getSupabaseBrowserClient,
-  isPreviewModeAllowed,
-} from "@/lib/supabase/client";
+import { AuthApiError, isPreviewModeAllowed } from "@/lib/auth/client";
 
 function requestedPath() {
   const value = new URLSearchParams(window.location.search).get("next");
@@ -24,7 +21,7 @@ function requestedPath() {
 export default function LoginPage() {
   const router = useRouter();
   const { language, setLanguage, t } = useLanguage();
-  const { configured, enterPreviewMode, loading, session } = useAuth();
+  const { enterPreviewMode, loading, session, signIn } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -35,8 +32,6 @@ export default function LoginPage() {
     const searchParams = new URLSearchParams(window.location.search);
     if (searchParams.get("reason") === "session_expired") {
       setError(t("Your session expired. Please sign in again."));
-    } else if (searchParams.get("error") === "confirmation_failed") {
-      setError(t("The email confirmation link is invalid or has expired. Please try signing in again."));
     }
     if (!loading && session) router.replace(requestedPath());
   }, [loading, router, session, t]);
@@ -44,24 +39,22 @@ export default function LoginPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) {
-      setError(t("Supabase is not configured yet. Use preview mode for now."));
-      return;
-    }
-
     setSubmitting(true);
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    setSubmitting(false);
-    if (signInError) {
-      setError(signInError.message);
-      return;
+    try {
+      await signIn({ email, password });
+      router.replace(requestedPath());
+      router.refresh();
+    } catch (error) {
+      setError(
+        t(
+          error instanceof AuthApiError
+            ? error.message
+            : "Authentication could not be completed.",
+        ),
+      );
+    } finally {
+      setSubmitting(false);
     }
-    router.replace(requestedPath());
-    router.refresh();
   }
 
   function openPreview() {
@@ -94,7 +87,7 @@ export default function LoginPage() {
             <label className="field">
               <span>{t("Password")}</span>
               <span className="password-wrap">
-                <input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder={t("Enter your password")} />
+                <input type={showPassword ? "text" : "password"} autoComplete="current-password" maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required placeholder={t("Enter your password")} />
                 <button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? t("Hide password") : t("Show password")}>
                   {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
@@ -108,7 +101,7 @@ export default function LoginPage() {
           <p className="auth-switch">{t("New to ElectroMentor?")} <Link href="/register">{t("Create an account")}</Link></p>
           {isPreviewModeAllowed && (
             <div className="preview-note">
-              <p>{configured ? t("Mock API mode is active.") : t("Supabase credentials have not been added yet.")}</p>
+              <p>{t("Mock API mode is active.")}</p>
               <Button type="button" variant="secondary" icon={ShieldCheck} onClick={openPreview}>{t("Open safe preview")}</Button>
             </div>
           )}
