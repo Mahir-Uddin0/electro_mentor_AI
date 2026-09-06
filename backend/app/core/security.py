@@ -1,19 +1,21 @@
-"""Local verification for Supabase access tokens."""
+"""Password hashing and locally issued access-token security."""
 
 from dataclasses import dataclass
-from functools import lru_cache
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 
 
 class InvalidAccessTokenError(ValueError):
-    """Raised when a bearer token is not a valid Supabase user access token."""
+    """Raised when a bearer token is not a valid local access token."""
 
 
-class AccessTokenVerificationUnavailableError(RuntimeError):
-    """Raised when an asymmetric signing key cannot currently be retrieved."""
+class AuthenticationConfigurationError(RuntimeError):
+    """Raised when the local signing secret has not been configured."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,50 +25,101 @@ class AuthenticatedUser:
     role: str
     email: str | None
     claims: dict[str, Any]
+    display_name: str | None = None
 
 
-def verify_supabase_access_token(
+_password_hasher = PasswordHasher()
+
+
+def hash_password(password: str) -> str:
+    """Hash a password with Argon2id and a unique random salt."""
+    return _password_hasher.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password without exposing malformed-hash details."""
+    try:
+        return _password_hasher.verify(password_hash, password)
+    except (InvalidHashError, VerificationError):
+        return False
+
+
+def password_hash_needs_rehash(password_hash: str) -> bool:
+    try:
+        return _password_hasher.check_needs_rehash(password_hash)
+    except InvalidHashError:
+        return True
+
+
+def create_access_token(
+    *,
+    user_id: UUID,
+    email: str,
+    secret: str,
+    issuer: str,
+    audience: str,
+    lifetime: timedelta,
+) -> tuple[str, int]:
+    """Create a short-lived access JWT signed by this FastAPI backend."""
+    if not secret:
+        raise AuthenticationConfigurationError("AUTH_JWT_SECRET is required")
+
+    now = datetime.now(UTC)
+    expires_at = now + lifetime
+    token = jwt.encode(
+        {
+            "aud": audience,
+            "email": email,
+            "exp": expires_at,
+            "iat": now,
+            "iss": issuer,
+            "jti": str(uuid4()),
+            "role": "authenticated",
+            "sub": str(user_id),
+            "type": "access",
+        },
+        secret,
+        algorithm="HS256",
+    )
+    return token, int(lifetime.total_seconds())
+
+
+def verify_access_token(
     token: str,
     *,
-    jwt_secret: str | None,
-    supabase_url: str,
+    secret: str,
+    issuer: str,
+    audience: str,
 ) -> AuthenticatedUser:
-    """Verify signature and required claims using HS256 or cached project JWKS."""
-    issuer = f"{supabase_url.rstrip('/')}/auth/v1"
-    try:
-        header = jwt.get_unverified_header(token)
-        algorithm = header.get("alg")
-        if algorithm == "HS256":
-            if not jwt_secret:
-                raise InvalidAccessTokenError(
-                    "SUPABASE_JWT_SECRET is required for a legacy HS256 token"
-                )
-            signing_key: object = jwt_secret
-        elif algorithm in {"ES256", "RS256"}:
-            jwks_client = get_supabase_jwk_client(supabase_url)
-            signing_key = jwks_client.get_signing_key_from_jwt(token).key
-        else:
-            raise InvalidAccessTokenError("Unsupported Supabase JWT algorithm")
+    """Verify a JWT issued by this backend and return its user identity."""
+    if not secret:
+        raise AuthenticationConfigurationError("AUTH_JWT_SECRET is required")
 
+    try:
         claims = jwt.decode(
             token,
-            signing_key,
-            algorithms=[algorithm],
-            audience="authenticated",
+            secret,
+            algorithms=["HS256"],
+            audience=audience,
             issuer=issuer,
-            options={"require": ["aud", "exp", "iss", "role", "sub"]},
+            options={
+                "require": [
+                    "aud",
+                    "exp",
+                    "iat",
+                    "iss",
+                    "jti",
+                    "role",
+                    "sub",
+                    "type",
+                ]
+            },
         )
-    except jwt.PyJWKClientConnectionError as exc:
-        raise AccessTokenVerificationUnavailableError(
-            "Supabase signing keys are temporarily unavailable"
-        ) from exc
-    except InvalidAccessTokenError:
-        raise
     except jwt.PyJWTError as exc:
-        raise InvalidAccessTokenError("Invalid Supabase access token") from exc
+        raise InvalidAccessTokenError("Invalid local access token") from exc
 
-    if claims.get("role") != "authenticated":
-        raise InvalidAccessTokenError("Token is not for an authenticated user")
+    if claims.get("role") != "authenticated" or claims.get("type") != "access":
+        raise InvalidAccessTokenError("Token is not an authenticated access token")
 
     try:
         user_id = UUID(str(claims["sub"]))
@@ -80,17 +133,4 @@ def verify_supabase_access_token(
         role="authenticated",
         email=email if isinstance(email, str) else None,
         claims=claims,
-    )
-
-
-@lru_cache
-def get_supabase_jwk_client(supabase_url: str) -> jwt.PyJWKClient:
-    """Cache Supabase public signing keys for ten minutes."""
-    jwks_url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
-    return jwt.PyJWKClient(
-        jwks_url,
-        cache_keys=False,
-        cache_jwk_set=True,
-        lifespan=600,
-        timeout=5,
     )

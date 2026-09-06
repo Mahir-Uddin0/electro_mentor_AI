@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.language import ResponseLanguageMiddleware
+from app.db.session import initialize_database
 from app.services.chat_history import close_chat_history_service
 from app.services.conversations import close_conversation_repository
 from app.services.llm import close_llm_client
@@ -18,6 +19,7 @@ from app.services.tasks import close_task_repository
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    initialize_database(get_settings())
     yield
     await close_conversation_repository()
     await close_chat_history_service()

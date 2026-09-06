@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -23,11 +23,19 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = Field(default=4, ge=1, le=20)
 
+    database_url: str = f"sqlite:///{PROJECT_ROOT / 'data/electromentor.db'}"
+    # Required for issuing and verifying local access tokens. There is no
+    # insecure default: configure a random secret in backend/.env.
+    auth_jwt_secret: SecretStr | None = Field(default=None, min_length=32)
+    auth_jwt_issuer: str = "electromentor-api"
+    auth_jwt_audience: str = "electromentor-web"
+    auth_access_token_minutes: int = Field(default=15, ge=1, le=1_440)
+    auth_refresh_token_days: int = Field(default=14, ge=1, le=90)
+
     supabase_url: str | None = None
     supabase_api_key: str | None = None
     # Server-only Supabase secret. Never expose it to browser code.
     supabase_secret_key: str | None = None
-    supabase_jwt_secret: str | None = None
     supabase_conversations_table: str = Field(
         default="conversations",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
