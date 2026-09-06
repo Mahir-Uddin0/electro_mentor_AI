@@ -5,14 +5,17 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.security import (
-    AccessTokenVerificationUnavailableError,
     AuthenticatedUser,
+    AuthenticationConfigurationError,
     InvalidAccessTokenError,
-    verify_supabase_access_token,
+    verify_access_token,
 )
+from app.db.models import User
+from app.db.session import get_db_session
 from app.schemas.chat_history import ChatHistoryMessage
 from app.services.chat_history import (
     ChatHistoryConfigurationError,
@@ -38,28 +41,43 @@ def get_current_user(
         Depends(bearer_scheme),
     ],
     settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> AuthenticatedUser:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise _unauthorized("A Supabase access token is required")
-    if not settings.supabase_url:
+        raise _unauthorized("An access token is required")
+    if settings.auth_jwt_secret is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase authentication is not configured.",
+            detail="Local authentication is not configured.",
         )
 
     try:
-        return verify_supabase_access_token(
+        token_user = verify_access_token(
             credentials.credentials,
-            jwt_secret=settings.supabase_jwt_secret,
-            supabase_url=settings.supabase_url,
+            secret=settings.auth_jwt_secret.get_secret_value(),
+            issuer=settings.auth_jwt_issuer,
+            audience=settings.auth_jwt_audience,
         )
-    except AccessTokenVerificationUnavailableError as exc:
+    except AuthenticationConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase authentication is temporarily unavailable.",
+            detail="Local authentication is not configured.",
         ) from exc
     except InvalidAccessTokenError as exc:
-        raise _unauthorized("The Supabase access token is invalid or expired") from exc
+        raise _unauthorized("The access token is invalid or expired") from exc
+
+    user = session.get(User, str(token_user.id))
+    if user is None or not user.is_active:
+        raise _unauthorized("The access token is invalid or expired")
+
+    return AuthenticatedUser(
+        id=token_user.id,
+        access_token=token_user.access_token,
+        role=token_user.role,
+        email=user.email,
+        display_name=user.display_name,
+        claims=token_user.claims,
+    )
 
 
 @dataclass(frozen=True, slots=True)
