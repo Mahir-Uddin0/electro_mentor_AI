@@ -42,7 +42,7 @@ def get_database_engine(database_url: str) -> Engine:
 
 
 def initialize_database(settings: Settings) -> None:
-    """Create the initial authentication-only schema when it is absent."""
+    """Create local application tables that are absent."""
     Base.metadata.create_all(get_database_engine(settings.database_url))
 
 

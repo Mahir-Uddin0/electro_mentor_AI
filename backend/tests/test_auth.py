@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event, inspect, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.api.v1.endpoints import auth
+from app.api.v1.endpoints import auth, tasks
 from app.core.config import Settings, get_settings
 from app.core.security import (
     InvalidAccessTokenError,
@@ -49,6 +49,7 @@ def auth_client() -> Generator[tuple[TestClient, Session], None, None]:
     )
     application = FastAPI()
     application.include_router(auth.router, prefix="/api/v1/auth")
+    application.include_router(tasks.router, prefix="/api/v1/tasks")
 
     def override_settings() -> Settings:
         return settings
@@ -79,14 +80,64 @@ def _register(client: TestClient) -> dict[str, object]:
     return response.json()
 
 
-def test_database_contains_only_authentication_tables(
+def test_database_contains_local_application_tables(
     auth_client: tuple[TestClient, Session],
 ) -> None:
     _, session = auth_client
     assert set(inspect(session.bind).get_table_names()) == {
+        "chat_messages",
+        "conversations",
+        "practical_assessments",
         "refresh_sessions",
+        "tasks",
         "users",
     }
+
+
+def test_local_access_tokens_authorize_user_scoped_task_storage(
+    auth_client: tuple[TestClient, Session],
+) -> None:
+    client, _ = auth_client
+    first_auth = _register(client)
+    first_token = first_auth["access_token"]
+    assert isinstance(first_token, str)
+    first_headers = {"Authorization": f"Bearer {first_token}"}
+
+    created = client.post(
+        "/api/v1/tasks",
+        headers=first_headers,
+        json={"title": "Private local task", "priority": "high"},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["id"]
+    assert len(client.get("/api/v1/tasks", headers=first_headers).json()["tasks"]) == 1
+
+    second_auth = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "second@example.com",
+            "password": "another correct horse battery staple",
+        },
+    )
+    assert second_auth.status_code == 201
+    second_token = second_auth.json()["access_token"]
+    second_headers = {"Authorization": f"Bearer {second_token}"}
+
+    assert client.get("/api/v1/tasks", headers=second_headers).json() == {
+        "tasks": []
+    }
+    assert (
+        client.patch(
+            f"/api/v1/tasks/{task_id}",
+            headers=second_headers,
+            json={"title": "Unauthorized edit"},
+        ).status_code
+        == 404
+    )
+    assert client.delete(
+        f"/api/v1/tasks/{task_id}",
+        headers=second_headers,
+    ).status_code == 404
 
 
 def test_register_hashes_password_and_returns_usable_access_token(

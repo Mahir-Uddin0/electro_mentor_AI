@@ -32,32 +32,9 @@ class Settings(BaseSettings):
     auth_access_token_minutes: int = Field(default=15, ge=1, le=1_440)
     auth_refresh_token_days: int = Field(default=14, ge=1, le=90)
 
-    supabase_url: str | None = None
-    supabase_api_key: str | None = None
-    # Server-only Supabase secret. Never expose it to browser code.
-    supabase_secret_key: str | None = None
-    supabase_conversations_table: str = Field(
-        default="conversations",
-        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-    )
-    supabase_chat_messages_table: str = Field(
-        default="chat_messages",
-        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-    )
-    supabase_tasks_table: str = Field(
-        default="tasks",
-        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-    )
-    supabase_practical_assessments_table: str = Field(
-        default="practical_assessments",
-        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
-    )
-    supabase_practical_assessment_videos_bucket: str = Field(
-        default="practical-assessment-videos",
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
-    )
+
+
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
-    supabase_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     gemini_api_key: str | None = None
     gemini_generation_model: str = "gemini-3.7-flash"
@@ -94,11 +71,6 @@ class Settings(BaseSettings):
         ge=1,
         le=100_000_000,
     )
-    practical_assessment_storage_timeout_seconds: float = Field(
-        default=300,
-        gt=0,
-        le=1_800,
-    )
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_embedding_dimensions: int = Field(default=768, ge=768, le=768)
     gemini_embedding_batch_size: int = Field(default=5, ge=1, le=100)
@@ -129,6 +101,7 @@ class Settings(BaseSettings):
     chunks_directory: Path = Path("data/chunks")
     safety_checklist_directory: Path = Path("data/safety_checklist")
     guide_library_directory: Path = Path("data/wiring_circuit_guide_library")
+    practical_assessment_video_directory: Path = Path("data/practical_assessment_videos")
 
     semantic_breakpoint_percentile: float = Field(default=80.0, ge=0, le=100)
     semantic_candidate_chars: int = Field(default=350, gt=0)
