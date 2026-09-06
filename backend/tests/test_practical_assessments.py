@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -35,16 +35,17 @@ from app.schemas.practical_assessments import (
     VideoAnswerSuggestion,
     VideoInference,
 )
+from sqlalchemy.orm import Session
+
 from app.services.practical_assessments import (
     AssessmentVideoTooLargeError,
     GeminiPracticalAssessmentAnalyzer,
     PracticalAssessmentCompletedError,
     PracticalAssessmentConflictError,
     PracticalAssessmentIncompleteError,
-    PracticalAssessmentMigrationRequiredError,
     PracticalAssessmentProviderError,
     PracticalAssessmentService,
-    SupabasePracticalAssessmentRepository,
+    SQLitePracticalAssessmentRepository,
     UnsupportedAssessmentVideoError,
     ValidatedAssessmentVideo,
     get_practical_assessment_service,
@@ -54,6 +55,37 @@ from app.services.practical_assessments import (
 USER_ID = UUID("d2f7c64a-3e56-4d45-a47d-07331e2a95df")
 ASSESSMENT_ID = UUID("11111111-2222-4333-8444-555555555555")
 NOW = datetime(2026, 8, 25, 10, 0, tzinfo=UTC)
+
+
+@pytest.fixture()
+def db_session():
+    from app.db.base import Base
+    from app.db.models import User
+    from sqlalchemy import create_engine, event
+
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def enable_fk(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        now = datetime.now(UTC).replace(tzinfo=None)
+        session.add(
+            User(
+                id=str(USER_ID),
+                email="learner@example.com",
+                password_hash="placeholder",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+        yield session
 
 
 def _user():
@@ -356,191 +388,144 @@ def test_video_rejects_oversized_and_mismatched_uploads() -> None:
         )
 
 
-def test_repository_reads_and_writes_with_server_secret() -> None:
-    calls: list[httpx.Request] = []
+def test_repository_reads_and_writes_with_sqlite(
+    tmp_path: Path, db_session: Session
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row()
+    created = repository.create_draft(
+        assessment_id=row.id,
+        user_id=row.user_id,
+        payload=_row_json(),
+    )
+    assert created.revision == 1
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        if request.method == "GET":
-            assert request.headers["apikey"] == "sb_secret_server"
-            assert "authorization" not in request.headers
-            return httpx.Response(200, json=[_row_json()])
-        assert request.headers["apikey"] == "sb_secret_server"
-        assert "authorization" not in request.headers
-        assert request.url.params["revision"] == "eq.1"
-        return httpx.Response(200, json=[_row_json(revision=2)])
-
-    async def run() -> PracticalAssessment:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="sb_secret_server",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            current = await repository.get_for_user(
-                user_id=USER_ID,
-            )
-            assert current is not None
-            return await repository.update_draft(
-                assessment=current,
-                updates={"video_status": "questions_generated"},
-            )
-
-    assert asyncio.run(run()).revision == 2
-    assert [request.method for request in calls] == ["GET", "PATCH"]
+    current = repository.get_for_user(user_id=USER_ID)
+    assert current is not None
+    updated = repository.update_draft(
+        assessment=current,
+        updates={"video_status": "questions_generated"},
+    )
+    assert updated.revision == 2
 
 
-def test_repository_prefers_draft_then_falls_back_to_latest_completion() -> None:
-    calls: list[httpx.Request] = []
+def test_repository_prefers_draft_then_falls_back_to_latest_completion(
+    tmp_path: Path, db_session: Session
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    completed_id = uuid4()
+    draft1 = repository.create_draft(
+        assessment_id=completed_id,
+        user_id=USER_ID,
+        payload=_row_json(id=completed_id),
+    )
+    repository.complete(
+        assessment=draft1,
+        updates=_completed_overrides(),
+    )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        if request.url.params["status"] == "eq.draft":
-            return httpx.Response(200, json=[])
-        return httpx.Response(200, json=[_row_json(**_completed_overrides())])
-
-    async def run() -> PracticalAssessment | None:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="sb_secret_server",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            return await repository.get_for_user(user_id=USER_ID)
-
-    assessment = asyncio.run(run())
-
+    assessment = repository.get_for_user(user_id=USER_ID)
     assert assessment is not None
     assert assessment.status == "completed"
-    assert [request.url.params["status"] for request in calls] == [
-        "eq.draft",
-        "eq.completed",
-    ]
-    assert calls[1].url.params["order"] == "completed_at.desc,id.desc"
+
+    draft2_id = uuid4()
+    repository.create_draft(
+        assessment_id=draft2_id,
+        user_id=USER_ID,
+        payload=_row_json(id=draft2_id),
+    )
+    current = repository.get_for_user(user_id=USER_ID)
+    assert current is not None
+    assert current.status == "draft"
+    assert current.id == draft2_id
 
 
-def test_repository_lists_completed_history_with_exact_total() -> None:
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(
-            200,
-            json=[_row_json(**_completed_overrides())],
-            headers={"Content-Range": "0-0/4"},
+def test_repository_lists_completed_history_with_exact_total(
+    tmp_path: Path, db_session: Session
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    for _ in range(4):
+        cid = uuid4()
+        draft = repository.create_draft(
+            assessment_id=cid,
+            user_id=USER_ID,
+            payload=_row_json(id=cid),
+        )
+        repository.complete(
+            assessment=draft,
+            updates=_completed_overrides(),
         )
 
-    async def run() -> tuple[list[PracticalAssessmentHistoryItem], int]:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="sb_secret_server",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            return await repository.list_completed_for_user(
-                user_id=USER_ID,
-                limit=3,
-                offset=0,
-            )
-
-    assessments, total = asyncio.run(run())
-
-    assert len(assessments) == 1
-    assert assessments[0].id == ASSESSMENT_ID
+    assessments, total = repository.list_completed_for_user(
+        user_id=USER_ID,
+        limit=3,
+        offset=0,
+    )
+    assert len(assessments) == 3
     assert total == 4
-    assert calls[0].headers["prefer"] == "count=exact"
-    assert calls[0].url.params["user_id"] == f"eq.{USER_ID}"
-    assert calls[0].url.params["status"] == "eq.completed"
-    assert calls[0].url.params["limit"] == "3"
 
 
-def test_repository_missing_table_reports_migration() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            404,
-            json={"code": "PGRST205", "message": "missing relation"},
+def test_repository_enforces_one_draft_per_user(
+    tmp_path: Path, db_session: Session
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row()
+    repository.create_draft(
+        assessment_id=row.id,
+        user_id=row.user_id,
+        payload=_row_json(),
+    )
+    with pytest.raises(PracticalAssessmentConflictError):
+        repository.create_draft(
+            assessment_id=uuid4(),
+            user_id=row.user_id,
+            payload=_row_json(id=uuid4()),
         )
 
-    async def run() -> None:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="legacy.jwt.value",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            await repository.get_for_user(
-                user_id=USER_ID,
-            )
 
-    with pytest.raises(PracticalAssessmentMigrationRequiredError):
-        asyncio.run(run())
-
-
-def test_repository_streams_private_video_with_server_secret(tmp_path: Path) -> None:
+def test_repository_stores_and_retrieves_video_locally(
+    tmp_path: Path, db_session: Session
+) -> None:
     source = _validated_video(tmp_path)
-    uploaded: list[bytes] = []
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row(
+        video_size_bytes=source.size_bytes,
+        video_sha256=source.sha256,
+    )
+    repository.upload_video(
+        object_path=row.video_object_path,
+        video=source,
+    )
+    stored_path = tmp_path / "videos" / row.video_object_path
+    assert stored_path.is_file()
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["apikey"] == "sb_secret_server"
-        assert "authorization" not in request.headers
-        if request.method == "POST":
-            assert "/storage/v1/object/practical-assessment-videos/" in str(
-                request.url
-            )
-            uploaded.append(await request.aread())
-            return httpx.Response(200, json={})
-        if request.method == "GET":
-            assert "/storage/v1/object/authenticated/" in str(request.url)
-            return httpx.Response(200, content=source.path.read_bytes())
-        raise AssertionError(f"unexpected request: {request.method}")
-
-    async def run() -> ValidatedAssessmentVideo:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="sb_secret_server",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            row = _row(
-                video_size_bytes=source.size_bytes,
-                video_sha256=source.sha256,
-            )
-            await repository.upload_video(
-                object_path=row.video_object_path,
-                video=source,
-            )
-            return await repository.download_video(
-                assessment=row,
-                max_bytes=1_000,
-            )
-
-    downloaded = asyncio.run(run())
+    downloaded = repository.download_video(
+        assessment=row,
+        max_bytes=10_000,
+    )
     try:
-        assert uploaded == [source.path.read_bytes()]
         assert downloaded.path.read_bytes() == source.path.read_bytes()
     finally:
         downloaded.cleanup()
         source.cleanup()
+
+    repository.delete_video(object_path=row.video_object_path)
+    assert not stored_path.exists()
 
 
 class FakeAnalyzer:
@@ -600,15 +585,15 @@ class FakeRepository:
         self.uploaded_paths: list[str] = []
         self.deleted_paths: list[str] = []
 
-    async def get_for_user(self, **_: object) -> PracticalAssessment | None:
+    def get_for_user(self, **_: object) -> PracticalAssessment | None:
         return self.current
 
-    async def get_draft_for_user(self, **_: object) -> PracticalAssessment | None:
+    def get_draft_for_user(self, **_: object) -> PracticalAssessment | None:
         if self.current is None or self.current.status == "completed":
             return None
         return self.current
 
-    async def list_completed_for_user(
+    def list_completed_for_user(
         self,
         **_: object,
     ) -> tuple[list[PracticalAssessmentHistoryItem], int]:
@@ -619,12 +604,12 @@ class FakeRepository:
         )
         return [item], 1
 
-    async def get_by_id(self, **_: object) -> PracticalAssessment:
+    def get_by_id(self, **_: object) -> PracticalAssessment:
         if self.current is None:
             raise AssertionError("missing fake assessment")
         return self.current
 
-    async def create_draft(
+    def create_draft(
         self,
         *,
         assessment_id: UUID,
@@ -636,7 +621,7 @@ class FakeRepository:
         self.current = _row(id=assessment_id, user_id=user_id, **payload)
         return self.current
 
-    async def update_draft(
+    def update_draft(
         self,
         *,
         updates: dict[str, Any],
@@ -650,15 +635,15 @@ class FakeRepository:
         self.current = PracticalAssessment.model_validate(candidate)
         return self.current
 
-    async def complete(
+    def complete(
         self,
         *,
         updates: dict[str, Any],
         **_: object,
     ) -> PracticalAssessment:
-        return await self.update_draft(updates={"status": "completed", **updates})
+        return self.update_draft(updates={"status": "completed", **updates})
 
-    async def upload_video(
+    def upload_video(
         self,
         *,
         object_path: str,
@@ -666,12 +651,12 @@ class FakeRepository:
     ) -> None:
         self.uploaded_paths.append(object_path)
 
-    async def download_video(self, **_: object) -> ValidatedAssessmentVideo:
+    def download_video(self, **_: object) -> ValidatedAssessmentVideo:
         if self.downloaded_video is None:
             raise AssertionError("test did not provide a stored work video")
         return self.downloaded_video
 
-    async def delete_video(self, *, object_path: str) -> None:
+    def delete_video(self, *, object_path: str) -> None:
         self.deleted_paths.append(object_path)
 
 
@@ -1153,32 +1138,26 @@ def test_generate_answers_endpoint_calls_staged_service() -> None:
     assert len(response.json()["questions"]) == 10
 
 
-def test_repository_rejects_stale_compare_and_set() -> None:
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        if request.method == "PATCH":
-            return httpx.Response(200, json=[])
-        return httpx.Response(200, json=[_row_json(revision=2)])
-
-    async def run() -> None:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabasePracticalAssessmentRepository(
-                supabase_url="https://project.supabase.co",
-                secret_key="sb_secret_server",
-                table_name="practical_assessments",
-                timeout_seconds=10,
-                client=client,
-            )
-            await repository.update_draft(
-                assessment=_row(),
-                updates={"video_status": "questions_generated"},
-            )
-
+def test_repository_rejects_stale_compare_and_set(
+    tmp_path: Path, db_session: Session
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row()
+    created = repository.create_draft(
+        assessment_id=row.id,
+        user_id=row.user_id,
+        payload=_row_json(),
+    )
+    repository.update_draft(
+        assessment=created,
+        updates={"video_status": "questions_generated"},
+    )
+    # Trying to update with stale revision (revision 1 instead of 2)
     with pytest.raises(PracticalAssessmentConflictError, match="changed"):
-        asyncio.run(run())
-    assert calls == 2
+        repository.update_draft(
+            assessment=created,
+            updates={"video_status": "answers_generated"},
+        )

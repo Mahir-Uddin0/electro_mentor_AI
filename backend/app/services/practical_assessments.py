@@ -1,24 +1,30 @@
-"""Gemini work-video assessment orchestration and Supabase persistence."""
+"""Gemini work-video assessment orchestration and SQLite persistence."""
 
 import asyncio
 import hashlib
 import json
+import shutil
 import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Protocol
-from urllib.parse import quote
+from typing import Annotated, Any, Protocol
 from uuid import UUID, uuid4
 
-import httpx
-from pydantic import TypeAdapter, ValidationError
+from fastapi import Depends
+from pydantic import ValidationError
+from pydantic_core import to_jsonable_python
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings, resolve_project_path
 from app.core.language import ai_language_instruction
 from app.core.security import AuthenticatedUser
+from app.db.models import PracticalAssessmentRecord
+from app.db.session import get_db_session
 from app.schemas.practical_assessments import (
     COMPETENCY_IDS,
     COMPETENCY_LABELS,
@@ -106,29 +112,13 @@ compliant. Do not return scores, question feedback, or a checklist. Do not use
 markdown.
 """.strip()
 
-_ASSESSMENT_SELECT = (
-    "id,user_id,questionnaire_version,status,video_status,video_object_path,"
-    "video_file_name,video_mime_type,video_size_bytes,video_sha256,questions,"
-    "video_analysis,answers,safety_procedures_score,tool_usage_score,"
-    "technical_knowledge_score,work_quality_score,testing_verification_score,"
-    "documentation_score,overall_score,grade,passed,evaluation,"
-    "revision,created_at,updated_at,completed_at"
-)
-_ASSESSMENT_HISTORY_SELECT = (
-    "id,user_id,video_file_name,overall_score,grade,passed,"
-    "safety_procedures_score,tool_usage_score,technical_knowledge_score,"
-    "work_quality_score,testing_verification_score,documentation_score,"
-    "created_at,completed_at"
-)
-_ASSESSMENTS_ADAPTER = TypeAdapter(list[PracticalAssessment])
-_ASSESSMENT_HISTORY_ADAPTER = TypeAdapter(list[PracticalAssessmentHistoryItem])
 _DATABASE_QUESTIONS_SAFE_BYTES = 100_000
 _DATABASE_ANSWERS_SAFE_BYTES = 550_000
 _DATABASE_VIDEO_ANALYSIS_SAFE_BYTES = 280_000
 
 
 class PracticalAssessmentConfigurationError(RuntimeError):
-    """Required Supabase, Storage, or Gemini configuration is absent."""
+    """Required configuration is absent."""
 
 
 class PracticalAssessmentMigrationRequiredError(
@@ -144,7 +134,7 @@ class PracticalAssessmentStorageRequiredError(
 
 
 class PracticalAssessmentProviderError(RuntimeError):
-    """Supabase or Gemini returned an unavailable or malformed response."""
+    """Local storage or Gemini returned an unavailable or malformed response."""
 
 
 class PracticalAssessmentNotFoundError(LookupError):
@@ -304,167 +294,135 @@ class GeminiPracticalAssessmentAnalyzer:
         self._file_timeout = settings.gemini_file_processing_timeout_seconds
         self._client: object | None = None
 
-    def _get_client(self) -> object:
+    def _ensure_client(self) -> object:
+        if self._client is not None:
+            return self._client
         if not self._api_key:
             raise PracticalAssessmentConfigurationError(
-                "GEMINI_API_KEY is required for practical-work video assessment"
+                "GEMINI_API_KEY is required for practical-assessment analysis"
             )
-        if self._client is None:
-            from google import genai
+        from google import genai
 
-            self._client = genai.Client(api_key=self._api_key)
+        self._client = genai.Client(api_key=self._api_key)
         return self._client
 
     async def generate_questions(
         self,
         video: ValidatedAssessmentVideo,
     ) -> list[AssessmentQuestionDefinition]:
+        client = self._ensure_client()
         from google.genai import types
 
-        client = self._get_client()
-        remote_file: object | None = None
+        uploaded_file = await self._upload_file(client, video)
         try:
-            remote_file = await self._upload_video(client, video)
             config = types.GenerateContentConfig(
                 system_instruction=(
-                    f"{QUESTION_GENERATION_SYSTEM_INSTRUCTION}\n\n"
+                    f"{QUESTION_GENERATION_SYSTEM_INSTRUCTION}\n"
                     f"{ai_language_instruction(structured=True)}"
                 ),
-                max_output_tokens=self._max_output_tokens,
                 response_mime_type="application/json",
                 response_schema=GeminiQuestionGeneration,
+                max_output_tokens=self._max_output_tokens,
             )
             response = await self._generate_with_retry(
                 client,
-                [
-                    remote_file,
-                    types.Part.from_text(text=_question_generation_prompt()),
-                ],
+                [uploaded_file, _question_generation_prompt()],
                 config,
             )
-            parsed = _parse_structured_response(response, GeminiQuestionGeneration)
+            parsed: GeminiQuestionGeneration = _parse_structured_response(
+                response,
+                GeminiQuestionGeneration,
+            )
             return _questions_from_wire(parsed)
-        except PracticalAssessmentConfigurationError:
-            raise
-        except PracticalAssessmentProviderError:
-            raise
-        except Exception as exc:
-            raise AssessmentVideoProviderError(
-                "Gemini question generation failed"
-            ) from exc
         finally:
-            await self._delete_remote_file(client, remote_file)
+            await self._delete_remote_file(client, uploaded_file)
 
     async def generate_answers(
         self,
         video: ValidatedAssessmentVideo,
         questions: list[AssessmentQuestionDefinition],
     ) -> VideoInference:
+        client = self._ensure_client()
         from google.genai import types
 
-        client = self._get_client()
-        remote_file: object | None = None
+        uploaded_file = await self._upload_video(client, video)
         try:
-            remote_file = await self._upload_video(client, video)
             config = types.GenerateContentConfig(
                 system_instruction=(
-                    f"{VIDEO_ANSWER_SYSTEM_INSTRUCTION}\n\n"
+                    f"{VIDEO_ANSWER_SYSTEM_INSTRUCTION}\n"
                     f"{ai_language_instruction(structured=True)}"
                 ),
-                max_output_tokens=self._max_output_tokens,
                 response_mime_type="application/json",
                 response_schema=GeminiVideoAnswers,
+                max_output_tokens=self._max_output_tokens,
             )
             response = await self._generate_with_retry(
                 client,
-                [
-                    remote_file,
-                    types.Part.from_text(text=_video_answer_prompt(questions)),
-                ],
+                [uploaded_file, _video_answer_prompt(questions)],
                 config,
             )
-            parsed = _parse_structured_response(response, GeminiVideoAnswers)
+            parsed: GeminiVideoAnswers = _parse_structured_response(
+                response,
+                GeminiVideoAnswers,
+            )
             return _video_answers_from_wire(parsed)
-        except PracticalAssessmentConfigurationError:
-            raise
-        except PracticalAssessmentProviderError:
-            raise
-        except Exception as exc:
-            raise AssessmentVideoProviderError(
-                "Gemini video-answer generation failed"
-            ) from exc
         finally:
-            await self._delete_remote_file(client, remote_file)
+            await self._delete_remote_file(client, uploaded_file)
 
     async def evaluate(
         self,
         video: ValidatedAssessmentVideo,
         assessment: PracticalAssessment,
     ) -> AssessmentEvaluation:
+        client = self._ensure_client()
         from google.genai import types
 
-        client = self._get_client()
-        remote_file: object | None = None
+        payload = _evaluation_payload(assessment)
+        uploaded_file = await self._upload_video(client, video)
         try:
-            remote_file = await self._upload_video(client, video)
-            payload = _evaluation_payload(assessment)
-            result_config = types.GenerateContentConfig(
+            results_config = types.GenerateContentConfig(
                 system_instruction=(
-                    f"{RESULTS_SYSTEM_INSTRUCTION}\n\n"
+                    f"{RESULTS_SYSTEM_INSTRUCTION}\n"
                     f"{ai_language_instruction(structured=True)}"
                 ),
-                max_output_tokens=self._max_output_tokens,
                 response_mime_type="application/json",
                 response_schema=GeminiAssessmentResults,
+                max_output_tokens=self._max_output_tokens,
             )
-            suggestion_config = types.GenerateContentConfig(
+            suggestions_config = types.GenerateContentConfig(
                 system_instruction=(
-                    f"{SUGGESTIONS_SYSTEM_INSTRUCTION}\n\n"
+                    f"{SUGGESTIONS_SYSTEM_INSTRUCTION}\n"
                     f"{ai_language_instruction(structured=True)}"
                 ),
-                max_output_tokens=self._max_output_tokens,
                 response_mime_type="application/json",
                 response_schema=GeminiAssessmentSuggestions,
+                max_output_tokens=self._max_output_tokens,
             )
-            result_contents = [
-                remote_file,
-                types.Part.from_text(text=_results_prompt(payload)),
-            ]
-            suggestion_contents = [
-                remote_file,
-                types.Part.from_text(text=_suggestions_prompt(payload)),
-            ]
-            result_response, suggestion_response = await asyncio.gather(
-                self._generate_with_retry(client, result_contents, result_config),
-                self._generate_with_retry(
-                    client,
-                    suggestion_contents,
-                    suggestion_config,
-                ),
-                return_exceptions=True,
+            results_task = self._generate_with_retry(
+                client,
+                [uploaded_file, _results_prompt(payload)],
+                results_config,
             )
-            for response in (result_response, suggestion_response):
-                if isinstance(response, BaseException):
-                    raise response
-            results = _parse_structured_response(
-                result_response,
+            suggestions_task = self._generate_with_retry(
+                client,
+                [uploaded_file, _suggestions_prompt(payload)],
+                suggestions_config,
+            )
+            results_response, suggestions_response = await asyncio.gather(
+                results_task,
+                suggestions_task,
+            )
+            results: GeminiAssessmentResults = _parse_structured_response(
+                results_response,
                 GeminiAssessmentResults,
             )
-            suggestions = _parse_structured_response(
-                suggestion_response,
+            suggestions: GeminiAssessmentSuggestions = _parse_structured_response(
+                suggestions_response,
                 GeminiAssessmentSuggestions,
             )
             return _evaluation_from_wire(results, suggestions)
-        except PracticalAssessmentConfigurationError:
-            raise
-        except PracticalAssessmentProviderError:
-            raise
-        except Exception as exc:
-            raise PracticalAssessmentProviderError(
-                "Gemini practical-work evaluation failed"
-            ) from exc
         finally:
-            await self._delete_remote_file(client, remote_file)
+            await self._delete_remote_file(client, uploaded_file)
 
     async def _upload_video(
         self,
@@ -473,28 +431,28 @@ class GeminiPracticalAssessmentAnalyzer:
     ) -> object:
         from google.genai import types
 
-        remote_file = await client.aio.files.upload(
-            file=video.path,
-            config=types.UploadFileConfig(
-                mime_type=video.mime_type,
-                display_name="practical-work-assessment-video",
-            ),
+        config = types.UploadFileConfig(
+            mime_type=video.mime_type,
+            display_name=video.file_name,
         )
+        try:
+            remote_file = await client.aio.files.upload(
+                file=video.path,
+                config=config,
+            )
+        except Exception as exc:
+            raise PracticalAssessmentProviderError(
+                "Gemini practical-video upload failed"
+            ) from exc
         return await self._wait_for_file(client, remote_file)
 
-    async def _delete_remote_file(
-        self,
-        client: object,
-        remote_file: object | None,
-    ) -> None:
+    async def _delete_remote_file(self, client: object, remote_file: object) -> None:
         name = getattr(remote_file, "name", None)
         if not isinstance(name, str) or not name:
             return
         try:
             await client.aio.files.delete(name=name)
         except Exception:
-            # Gemini files expire automatically. Cleanup failure must not erase
-            # an otherwise valid assessment result.
             pass
 
     async def _wait_for_file(self, client: object, remote_file: object) -> object:
@@ -568,322 +526,404 @@ class PracticalAssessmentAnalyzer(Protocol):
     ) -> AssessmentEvaluation: ...
 
 
-class SupabasePracticalAssessmentRepository:
-    """Access assessment rows and private videos with server authority."""
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
+def _dump_json_field(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(to_jsonable_python(value), ensure_ascii=False)
+
+
+def _to_practical_assessment(record: PracticalAssessmentRecord) -> PracticalAssessment:
+    questions = (
+        json.loads(record.questions)
+        if isinstance(record.questions, str)
+        else record.questions
+    )
+    answers = (
+        json.loads(record.answers)
+        if isinstance(record.answers, str)
+        else record.answers
+    )
+    video_analysis = (
+        json.loads(record.video_analysis)
+        if record.video_analysis and isinstance(record.video_analysis, str)
+        else record.video_analysis
+    )
+    evaluation = (
+        json.loads(record.evaluation)
+        if record.evaluation and isinstance(record.evaluation, str)
+        else record.evaluation
+    )
+    return PracticalAssessment(
+        id=UUID(record.id),
+        user_id=UUID(record.user_id),
+        questionnaire_version=record.questionnaire_version,
+        status=record.status,
+        video_status=record.video_status,
+        video_object_path=record.video_object_path,
+        video_file_name=record.video_file_name,
+        video_mime_type=record.video_mime_type,
+        video_size_bytes=record.video_size_bytes,
+        video_sha256=record.video_sha256,
+        questions=questions,
+        video_analysis=video_analysis,
+        answers=answers,
+        safety_procedures_score=record.safety_procedures_score,
+        tool_usage_score=record.tool_usage_score,
+        technical_knowledge_score=record.technical_knowledge_score,
+        work_quality_score=record.work_quality_score,
+        testing_verification_score=record.testing_verification_score,
+        documentation_score=record.documentation_score,
+        overall_score=record.overall_score,
+        grade=record.grade,
+        passed=record.passed,
+        evaluation=evaluation,
+        personalization_context=record.personalization_context,
+        revision=record.revision,
+        created_at=_as_utc(record.created_at),
+        updated_at=_as_utc(record.updated_at),
+        completed_at=_as_utc(record.completed_at),
+    )
+
+
+def _to_history_item(
+    record: PracticalAssessmentRecord,
+) -> PracticalAssessmentHistoryItem:
+    return PracticalAssessmentHistoryItem(
+        id=UUID(record.id),
+        video_file_name=record.video_file_name,
+        overall_score=record.overall_score or 0,
+        grade=record.grade or "F",
+        passed=bool(record.passed),
+        safety_procedures_score=record.safety_procedures_score or 0,
+        tool_usage_score=record.tool_usage_score or 0,
+        technical_knowledge_score=record.technical_knowledge_score or 0,
+        work_quality_score=record.work_quality_score or 0,
+        testing_verification_score=record.testing_verification_score or 0,
+        documentation_score=record.documentation_score or 0,
+        created_at=_as_utc(record.created_at),
+        completed_at=_as_utc(record.completed_at) or _as_utc(record.updated_at),
+    )
+
+
+class SQLitePracticalAssessmentRepository:
+    """Access assessment rows in SQLite and private videos in local filesystem."""
 
     def __init__(
         self,
         *,
-        supabase_url: str | None,
-        secret_key: str | None,
-        table_name: str,
-        timeout_seconds: float,
-        video_bucket: str = "practical-assessment-videos",
-        storage_timeout_seconds: float = 300.0,
-        client: httpx.AsyncClient | None = None,
+        session: Session,
+        video_directory: Path,
     ) -> None:
-        self._supabase_url = supabase_url.rstrip("/") if supabase_url else None
-        self._secret_key = secret_key
-        self._table_name = table_name
-        self._video_bucket = video_bucket
-        self._storage_timeout = storage_timeout_seconds
-        self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._session = session
+        self._video_directory = video_directory
+        self._video_directory.mkdir(parents=True, exist_ok=True)
 
-    def _url(self) -> str:
-        if not self._supabase_url:
-            raise PracticalAssessmentConfigurationError(
-                "SUPABASE_URL is required for practical-assessment storage"
-            )
-        return f"{self._supabase_url}/rest/v1/{self._table_name}"
-
-    def _storage_url(
-        self,
-        object_path: str,
-        *,
-        authenticated: bool = False,
-    ) -> str:
-        if not self._supabase_url:
-            raise PracticalAssessmentConfigurationError(
-                "SUPABASE_URL is required for practical-video storage"
-            )
-        encoded_bucket = quote(self._video_bucket, safe="")
-        encoded_path = "/".join(
-            quote(part, safe="") for part in _validate_object_path(object_path)
-        )
-        prefix = "object/authenticated" if authenticated else "object"
-        return (
-            f"{self._supabase_url}/storage/v1/{prefix}/"
-            f"{encoded_bucket}/{encoded_path}"
-        )
-
-    def _storage_collection_url(self) -> str:
-        if not self._supabase_url:
-            raise PracticalAssessmentConfigurationError(
-                "SUPABASE_URL is required for practical-video storage"
-            )
-        return (
-            f"{self._supabase_url}/storage/v1/object/"
-            f"{quote(self._video_bucket, safe='')}"
-        )
-
-    def _read_headers(self) -> dict[str, str]:
-        headers = self._write_headers()
-        headers.pop("Prefer", None)
-        return headers
-
-    def _write_headers(self) -> dict[str, str]:
-        if not self._secret_key:
-            raise PracticalAssessmentConfigurationError(
-                "SUPABASE_SECRET_KEY is required for practical-assessment storage"
-            )
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "apikey": self._secret_key,
-            "Prefer": "return=representation",
-        }
-        if not self._secret_key.startswith("sb_secret_"):
-            headers["Authorization"] = f"Bearer {self._secret_key}"
-        return headers
-
-    def _storage_headers(
-        self,
-        content_type: str = "application/json",
-    ) -> dict[str, str]:
-        headers = self._write_headers()
-        headers.pop("Prefer", None)
-        headers["Content-Type"] = content_type
-        return headers
-
-    async def get_for_user(
+    def get_for_user(
         self,
         *,
         user_id: UUID,
     ) -> PracticalAssessment | None:
-        draft = await self.get_draft_for_user(user_id=user_id)
+        draft = self.get_draft_for_user(user_id=user_id)
         if draft is not None:
             return draft
 
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _ASSESSMENT_SELECT,
-                "user_id": f"eq.{user_id}",
-                "status": "eq.completed",
-                "order": "completed_at.desc,id.desc",
-                "limit": "1",
-            },
-            headers=self._read_headers(),
-        )
-        rows = self._parse_rows(response)
-        self._assert_owners(rows, user_id)
-        return rows[0] if rows else None
+        try:
+            record = self._session.scalar(
+                select(PracticalAssessmentRecord)
+                .where(
+                    PracticalAssessmentRecord.user_id == str(user_id),
+                    PracticalAssessmentRecord.status == "completed",
+                )
+                .order_by(
+                    PracticalAssessmentRecord.completed_at.desc(),
+                    PracticalAssessmentRecord.id.desc(),
+                )
+                .limit(1)
+            )
+        except SQLAlchemyError as exc:
+            raise PracticalAssessmentProviderError(
+                "Could not read practical assessment from SQLite"
+            ) from exc
+        return _to_practical_assessment(record) if record is not None else None
 
-    async def get_draft_for_user(
+    def get_draft_for_user(
         self,
         *,
         user_id: UUID,
     ) -> PracticalAssessment | None:
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _ASSESSMENT_SELECT,
-                "user_id": f"eq.{user_id}",
-                "status": "eq.draft",
-                "order": "created_at.desc,id.desc",
-                "limit": "2",
-            },
-            headers=self._read_headers(),
-        )
-        rows = self._parse_rows(response)
-        self._assert_owners(rows, user_id)
-        if len(rows) > 1:
+        try:
+            records = self._session.scalars(
+                select(PracticalAssessmentRecord)
+                .where(
+                    PracticalAssessmentRecord.user_id == str(user_id),
+                    PracticalAssessmentRecord.status == "draft",
+                )
+                .order_by(
+                    PracticalAssessmentRecord.created_at.desc(),
+                    PracticalAssessmentRecord.id.desc(),
+                )
+                .limit(2)
+            ).all()
+        except SQLAlchemyError as exc:
             raise PracticalAssessmentProviderError(
-                "Supabase returned multiple active practical assessments"
-            )
-        return rows[0] if rows else None
+                "Could not read practical assessment draft from SQLite"
+            ) from exc
 
-    async def list_completed_for_user(
+        if len(records) > 1:
+            raise PracticalAssessmentProviderError(
+                "Multiple active practical assessment drafts found for user"
+            )
+        return _to_practical_assessment(records[0]) if records else None
+
+    def list_completed_for_user(
         self,
         *,
         user_id: UUID,
         limit: int,
         offset: int,
     ) -> tuple[list[PracticalAssessmentHistoryItem], int]:
-        headers = self._read_headers()
-        headers["Prefer"] = "count=exact"
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _ASSESSMENT_HISTORY_SELECT,
-                "user_id": f"eq.{user_id}",
-                "status": "eq.completed",
-                "order": "completed_at.desc,id.desc",
-                "limit": str(limit),
-                "offset": str(offset),
-            },
-            headers=headers,
-        )
-        rows = self._parse_history_rows(response, user_id)
-        return rows, _exact_count(response)
+        try:
+            total = self._session.scalar(
+                select(func.count(PracticalAssessmentRecord.id)).where(
+                    PracticalAssessmentRecord.user_id == str(user_id),
+                    PracticalAssessmentRecord.status == "completed",
+                )
+            ) or 0
+            records = self._session.scalars(
+                select(PracticalAssessmentRecord)
+                .where(
+                    PracticalAssessmentRecord.user_id == str(user_id),
+                    PracticalAssessmentRecord.status == "completed",
+                )
+                .order_by(
+                    PracticalAssessmentRecord.completed_at.desc(),
+                    PracticalAssessmentRecord.id.desc(),
+                )
+                .limit(limit)
+                .offset(offset)
+            ).all()
+        except SQLAlchemyError as exc:
+            raise PracticalAssessmentProviderError(
+                "Could not read practical assessment history from SQLite"
+            ) from exc
 
-    async def get_by_id(
+        items = [_to_history_item(record) for record in records]
+        return items, total
+
+    def get_by_id(
         self,
         *,
         assessment_id: UUID,
         user_id: UUID,
     ) -> PracticalAssessment:
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _ASSESSMENT_SELECT,
-                "id": f"eq.{assessment_id}",
-                "user_id": f"eq.{user_id}",
-                "limit": "1",
-            },
-            headers=self._read_headers(),
-        )
-        rows = self._parse_rows(response)
-        if not rows:
-            raise PracticalAssessmentNotFoundError("Assessment not found")
-        self._assert_owners(rows, user_id)
-        return rows[0]
+        try:
+            record = self._session.scalar(
+                select(PracticalAssessmentRecord).where(
+                    PracticalAssessmentRecord.id == str(assessment_id),
+                    PracticalAssessmentRecord.user_id == str(user_id),
+                )
+            )
+        except SQLAlchemyError as exc:
+            raise PracticalAssessmentProviderError(
+                "Could not read practical assessment from SQLite"
+            ) from exc
+        if record is None:
+            raise PracticalAssessmentNotFoundError("Practical assessment not found")
+        return _to_practical_assessment(record)
 
-    async def create_draft(
+    def create_draft(
         self,
         *,
         assessment_id: UUID,
         user_id: UUID,
         payload: dict[str, Any],
     ) -> PracticalAssessment:
-        response = await self._request(
-            "POST",
-            self._url(),
-            json={"id": str(assessment_id), "user_id": str(user_id), **payload},
-            headers=self._write_headers(),
-        )
-        row = self._one_row(response, "created assessment")
-        self._assert_owners([row], user_id)
-        return row
+        existing_draft = self.get_draft_for_user(user_id=user_id)
+        if existing_draft is not None:
+            raise PracticalAssessmentConflictError(
+                "An active practical assessment already exists for this user"
+            )
 
-    async def update_draft(
+        now = _utcnow()
+        record = PracticalAssessmentRecord(
+            id=str(assessment_id),
+            user_id=str(user_id),
+            questionnaire_version=payload.get(
+                "questionnaire_version", "work_video_v3"
+            ),
+            status=payload.get("status", "draft"),
+            video_status=payload.get("video_status", "questions_generated"),
+            video_file_name=payload["video_file_name"],
+            video_mime_type=payload["video_mime_type"],
+            video_size_bytes=payload["video_size_bytes"],
+            video_sha256=payload["video_sha256"],
+            video_object_path=payload.get("video_object_path")
+            or f"{user_id}/{assessment_id}/{payload.get('video_file_name', 'video.mp4')}",
+            questions=_dump_json_field(payload.get("questions")) or "[]",
+            video_analysis=_dump_json_field(payload.get("video_analysis")),
+            answers=_dump_json_field(payload.get("answers")) or "[]",
+            safety_procedures_score=payload.get("safety_procedures_score"),
+            tool_usage_score=payload.get("tool_usage_score"),
+            technical_knowledge_score=payload.get("technical_knowledge_score"),
+            work_quality_score=payload.get("work_quality_score"),
+            testing_verification_score=payload.get("testing_verification_score"),
+            documentation_score=payload.get("documentation_score"),
+            overall_score=payload.get("overall_score"),
+            grade=payload.get("grade"),
+            passed=payload.get("passed"),
+            evaluation=_dump_json_field(payload.get("evaluation")),
+            personalization_context=payload.get("personalization_context"),
+            revision=1,
+            created_at=now,
+            updated_at=now,
+            completed_at=None,
+        )
+        self._session.add(record)
+        try:
+            self._session.commit()
+            self._session.refresh(record)
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise PracticalAssessmentConflictError(
+                "An active practical assessment already exists for this user"
+            ) from exc
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise PracticalAssessmentProviderError(
+                "Could not create practical assessment in SQLite"
+            ) from exc
+        return _to_practical_assessment(record)
+
+    def update_draft(
         self,
         *,
         assessment: PracticalAssessment,
         updates: dict[str, Any],
     ) -> PracticalAssessment:
-        response = await self._request(
-            "PATCH",
-            self._url(),
-            params={
-                "id": f"eq.{assessment.id}",
-                "user_id": f"eq.{assessment.user_id}",
-                "status": "eq.draft",
-                "revision": f"eq.{assessment.revision}",
-            },
-            json=updates,
-            headers=self._write_headers(),
-        )
-        rows = self._parse_rows(response)
-        if not rows:
-            await self._raise_write_conflict(assessment)
-        row = self._one_row(response, "updated assessment")
-        self._assert_owners([row], assessment.user_id)
-        return row
+        db_updates: dict[str, Any] = {}
+        for key, value in updates.items():
+            if (
+                key in {"questions", "answers", "video_analysis", "evaluation"}
+            ):
+                db_updates[key] = _dump_json_field(value)
+            elif key == "completed_at" and isinstance(value, str):
+                db_updates[key] = datetime.fromisoformat(value).replace(
+                    tzinfo=None
+                )
+            elif key == "completed_at" and isinstance(value, datetime):
+                db_updates[key] = value.replace(tzinfo=None)
+            else:
+                db_updates[key] = value
 
-    async def complete(
+        db_updates["updated_at"] = _utcnow()
+        db_updates["revision"] = PracticalAssessmentRecord.revision + 1
+        if (
+            db_updates.get("status") == "completed"
+            and "completed_at" not in db_updates
+        ):
+            db_updates["completed_at"] = _utcnow()
+
+        stmt = (
+            update(PracticalAssessmentRecord)
+            .where(
+                PracticalAssessmentRecord.id == str(assessment.id),
+                PracticalAssessmentRecord.user_id == str(assessment.user_id),
+                PracticalAssessmentRecord.status == "draft",
+                PracticalAssessmentRecord.revision == assessment.revision,
+            )
+            .values(**db_updates)
+        )
+
+        try:
+            result = self._session.execute(stmt)
+            if result.rowcount != 1:
+                self._session.rollback()
+                self._raise_write_conflict(assessment)
+            self._session.commit()
+            return self.get_by_id(
+                assessment_id=assessment.id,
+                user_id=assessment.user_id,
+            )
+        except (
+            PracticalAssessmentConflictError,
+            PracticalAssessmentCompletedError,
+            PracticalAssessmentNotFoundError,
+        ):
+            raise
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise PracticalAssessmentProviderError(
+                "Could not update practical assessment in SQLite"
+            ) from exc
+
+    def complete(
         self,
         *,
         assessment: PracticalAssessment,
         updates: dict[str, Any],
     ) -> PracticalAssessment:
-        return await self.update_draft(
+        return self.update_draft(
             assessment=assessment,
             updates={"status": "completed", **updates},
         )
 
-    async def upload_video(
+    def upload_video(
         self,
         *,
         object_path: str,
         video: ValidatedAssessmentVideo,
     ) -> None:
-        await self._request(
-            "POST",
-            self._storage_url(object_path),
-            headers=self._storage_headers(video.mime_type),
-            content=_file_chunks(video.path),
-            timeout=self._storage_timeout,
-            storage=True,
-        )
+        target = self._video_directory / object_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(video.path, target)
+        except OSError as exc:
+            raise PracticalAssessmentProviderError(
+                "Could not save practical assessment video to local storage"
+            ) from exc
 
-    async def download_video(
+    def download_video(
         self,
         *,
         assessment: PracticalAssessment,
         max_bytes: int,
     ) -> ValidatedAssessmentVideo:
-        suffix = {
-            "video/mp4": ".mp4",
-            "video/mov": ".mov",
-            "video/webm": ".webm",
-        }.get(assessment.video_mime_type, ".video")
-        temp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        temp_path = Path(temp.name)
+        target = self._video_directory / assessment.video_object_path
+        if not target.is_file():
+            raise PracticalAssessmentProviderError(
+                "The stored practical video was not found in local storage"
+            )
+
+        size = target.stat().st_size
+        if size > max_bytes:
+            raise AssessmentVideoTooLargeError(
+                "The stored practical video exceeds the configured limit."
+            )
+
         digest = hashlib.sha256()
-        size = 0
         header = bytearray()
         try:
-            async with self._client.stream(
-                "GET",
-                self._storage_url(
-                    assessment.video_object_path,
-                    authenticated=True,
-                ),
-                headers=self._storage_headers(),
-                timeout=self._storage_timeout,
-            ) as response:
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    self._raise_http_status(exc, storage=True)
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise AssessmentVideoTooLargeError(
-                            "The stored practical video exceeds the configured limit."
-                        )
+            with target.open("rb") as f:
+                while chunk := f.read(1024 * 1024):
                     if len(header) < 32:
                         header.extend(chunk[: 32 - len(header)])
                     digest.update(chunk)
-                    await asyncio.to_thread(temp.write, chunk)
-            await asyncio.to_thread(temp.flush)
-        except PracticalAssessmentConfigurationError:
-            temp.close()
-            temp_path.unlink(missing_ok=True)
-            raise
-        except (AssessmentVideoTooLargeError, PracticalAssessmentProviderError):
-            temp.close()
-            temp_path.unlink(missing_ok=True)
-            raise
-        except httpx.RequestError as exc:
-            temp.close()
-            temp_path.unlink(missing_ok=True)
+        except OSError as exc:
             raise PracticalAssessmentProviderError(
-                "Supabase practical-video download failed"
+                "Could not read stored practical video from local storage"
             ) from exc
-        except BaseException:
-            temp.close()
-            temp_path.unlink(missing_ok=True)
-            raise
-        finally:
-            if not temp.closed:
-                temp.close()
 
         detected = _detect_video_mime_type(bytes(header))
         expected = _normalize_video_mime_type(assessment.video_mime_type)
@@ -894,10 +934,20 @@ class SupabasePracticalAssessmentRepository:
             or detected is None
             or (detected != expected and not compatible_iso_media)
         ):
-            temp_path.unlink(missing_ok=True)
             raise PracticalAssessmentProviderError(
                 "The stored practical video failed its integrity check"
             )
+
+        suffix = {
+            "video/mp4": ".mp4",
+            "video/mov": ".mov",
+            "video/webm": ".webm",
+        }.get(assessment.video_mime_type, ".video")
+        temp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        temp_path = Path(temp.name)
+        temp.close()
+        shutil.copyfile(target, temp_path)
+
         return ValidatedAssessmentVideo(
             path=temp_path,
             file_name=assessment.video_file_name,
@@ -906,24 +956,28 @@ class SupabasePracticalAssessmentRepository:
             sha256=digest.hexdigest(),
         )
 
-    async def delete_video(self, *, object_path: str) -> None:
-        await self._request(
-            "DELETE",
-            self._storage_collection_url(),
-            headers=self._storage_headers(),
-            json={"prefixes": [object_path]},
-            timeout=self._storage_timeout,
-            storage=True,
-        )
+    def delete_video(self, *, object_path: str) -> None:
+        target = self._video_directory / object_path
+        target.unlink(missing_ok=True)
+        try:
+            if target.parent.exists() and not any(target.parent.iterdir()):
+                target.parent.rmdir()
+                if (
+                    target.parent.parent.exists()
+                    and not any(target.parent.parent.iterdir())
+                ):
+                    target.parent.parent.rmdir()
+        except OSError:
+            pass
 
-    async def _raise_write_conflict(
-        self,
-        previous: PracticalAssessment,
-    ) -> None:
-        current = await self.get_by_id(
-            assessment_id=previous.id,
-            user_id=previous.user_id,
-        )
+    def _raise_write_conflict(self, previous: PracticalAssessment) -> None:
+        try:
+            current = self.get_by_id(
+                assessment_id=previous.id,
+                user_id=previous.user_id,
+            )
+        except PracticalAssessmentNotFoundError:
+            raise PracticalAssessmentNotFoundError("Practical assessment not found")
         if current.status == "completed":
             raise PracticalAssessmentCompletedError(
                 "The practical assessment is already completed"
@@ -932,107 +986,14 @@ class SupabasePracticalAssessmentRepository:
             "The practical assessment changed during this request; reload and retry"
         )
 
-    async def _request(
-        self,
-        method: str,
-        url: str,
-        *,
-        storage: bool = False,
-        **kwargs: object,
-    ) -> httpx.Response:
-        try:
-            response = await self._client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            self._raise_http_status(exc, storage=storage)
-        except httpx.RequestError as exc:
-            label = "video-storage" if storage else "assessment"
-            raise PracticalAssessmentProviderError(
-                f"Supabase practical-{label} request failed"
-            ) from exc
-        raise AssertionError("unreachable")
-
-    @staticmethod
-    def _raise_http_status(
-        exc: httpx.HTTPStatusError,
-        *,
-        storage: bool,
-    ) -> None:
-        if storage and _is_missing_bucket_response(exc.response):
-            raise PracticalAssessmentStorageRequiredError(
-                "The private practical-video bucket has not been created"
-            ) from exc
-        if not storage and _is_missing_table_response(exc.response):
-            raise PracticalAssessmentMigrationRequiredError(
-                "The practical-assessment migration has not been applied"
-            ) from exc
-        if not storage and _is_unique_violation(exc.response):
-            raise PracticalAssessmentConflictError(
-                "An active practical assessment already exists for this user"
-            ) from exc
-        label = "video-storage" if storage else "assessment"
-        raise PracticalAssessmentProviderError(
-            f"Supabase practical-{label} request failed"
-        ) from exc
-
-    @staticmethod
-    def _parse_rows(response: httpx.Response) -> list[PracticalAssessment]:
-        try:
-            return _ASSESSMENTS_ADAPTER.validate_python(response.json())
-        except (ValueError, ValidationError) as exc:
-            raise PracticalAssessmentProviderError(
-                "Supabase returned invalid practical-assessment data"
-            ) from exc
-
-    @staticmethod
-    def _parse_history_rows(
-        response: httpx.Response,
-        user_id: UUID,
-    ) -> list[PracticalAssessmentHistoryItem]:
-        try:
-            payload = response.json()
-            if not isinstance(payload, list):
-                raise ValueError("assessment history is not a list")
-            for row in payload:
-                if not isinstance(row, dict):
-                    raise ValueError("assessment history row is not an object")
-                if UUID(str(row.get("user_id"))) != user_id:
-                    raise ValueError("assessment history owner does not match")
-            return _ASSESSMENT_HISTORY_ADAPTER.validate_python(payload)
-        except (TypeError, ValueError, ValidationError) as exc:
-            raise PracticalAssessmentProviderError(
-                "Supabase returned invalid practical-assessment history"
-            ) from exc
-
-    @classmethod
-    def _one_row(cls, response: httpx.Response, action: str) -> PracticalAssessment:
-        rows = cls._parse_rows(response)
-        if len(rows) != 1:
-            raise PracticalAssessmentProviderError(
-                f"Supabase did not return the {action}"
-            )
-        return rows[0]
-
-    @staticmethod
-    def _assert_owners(rows: list[PracticalAssessment], user_id: UUID) -> None:
-        if any(row.user_id != user_id for row in rows):
-            raise PracticalAssessmentProviderError(
-                "Supabase returned another user's practical assessment"
-            )
-
-    async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
-
 
 class PracticalAssessmentService:
-    """Apply the repeatable work-video workflow around Gemini and Supabase."""
+    """Apply the repeatable work-video workflow around Gemini and SQLite."""
 
     def __init__(
         self,
         *,
-        repository: SupabasePracticalAssessmentRepository,
+        repository: SQLitePracticalAssessmentRepository,
         analyzer: PracticalAssessmentAnalyzer,
         max_video_bytes: int | None = None,
     ) -> None:
@@ -1048,7 +1009,7 @@ class PracticalAssessmentService:
         self,
         user: AuthenticatedUser,
     ) -> PracticalAssessment | None:
-        return await self._repository.get_for_user(
+        return self._repository.get_for_user(
             user_id=user.id,
         )
 
@@ -1057,7 +1018,7 @@ class PracticalAssessmentService:
         user: AuthenticatedUser,
         assessment_id: UUID,
     ) -> PracticalAssessment:
-        return await self._repository.get_by_id(
+        return self._repository.get_by_id(
             assessment_id=assessment_id,
             user_id=user.id,
         )
@@ -1069,7 +1030,7 @@ class PracticalAssessmentService:
         limit: int,
         offset: int,
     ) -> tuple[list[PracticalAssessmentHistoryItem], int]:
-        return await self._repository.list_completed_for_user(
+        return self._repository.list_completed_for_user(
             user_id=user.id,
             limit=limit,
             offset=offset,
@@ -1081,7 +1042,7 @@ class PracticalAssessmentService:
         *,
         video: ValidatedAssessmentVideo,
     ) -> PracticalAssessment:
-        existing = await self._repository.get_draft_for_user(
+        existing = self._repository.get_draft_for_user(
             user_id=user.id,
         )
 
@@ -1089,7 +1050,7 @@ class PracticalAssessmentService:
         object_path = _video_object_path(user.id, assessment_id, video)
         uploaded = False
         try:
-            await self._repository.upload_video(
+            self._repository.upload_video(
                 object_path=object_path,
                 video=video,
             )
@@ -1130,23 +1091,23 @@ class PracticalAssessmentService:
                 "evaluation": None,
             }
             if existing is None:
-                saved = await self._repository.create_draft(
+                saved = self._repository.create_draft(
                     assessment_id=assessment_id,
                     user_id=user.id,
                     payload=payload,
                 )
             else:
-                saved = await self._repository.update_draft(
+                saved = self._repository.update_draft(
                     assessment=existing,
                     updates=payload,
                 )
         except BaseException:
             if uploaded:
-                await _best_effort_delete_video(self._repository, object_path)
+                _best_effort_delete_video(self._repository, object_path)
             raise
 
         if existing is not None and existing.video_object_path != object_path:
-            await _best_effort_delete_video(
+            _best_effort_delete_video(
                 self._repository,
                 existing.video_object_path,
             )
@@ -1157,7 +1118,7 @@ class PracticalAssessmentService:
         user: AuthenticatedUser,
         assessment_id: UUID,
     ) -> PracticalAssessment:
-        current = await self._repository.get_by_id(
+        current = self._repository.get_by_id(
             assessment_id=assessment_id,
             user_id=user.id,
         )
@@ -1168,7 +1129,7 @@ class PracticalAssessmentService:
         if current.video_status == "answers_generated":
             return current
 
-        video = await self._repository.download_video(
+        video = self._repository.download_video(
             assessment=current,
             max_bytes=self._max_video_bytes,
         )
@@ -1189,7 +1150,7 @@ class PracticalAssessmentService:
             max_bytes=_DATABASE_VIDEO_ANALYSIS_SAFE_BYTES,
         )
         answers = _merge_suggestions(current.answers, stored_inference)
-        return await self._repository.update_draft(
+        return self._repository.update_draft(
             assessment=current,
             updates={
                 "video_status": "answers_generated",
@@ -1204,7 +1165,7 @@ class PracticalAssessmentService:
         assessment_id: UUID,
         request: AssessmentAnswersUpdate,
     ) -> PracticalAssessment:
-        current = await self._repository.get_by_id(
+        current = self._repository.get_by_id(
             assessment_id=assessment_id,
             user_id=user.id,
         )
@@ -1216,12 +1177,14 @@ class PracticalAssessmentService:
             raise PracticalAssessmentIncompleteError(
                 "Generate the video-based answer suggestions before editing answers"
             )
-        submitted = {answer.question_id: answer.answer for answer in request.answers}
+        submitted = {
+            answer.question_id: answer.answer for answer in request.answers
+        }
         answers = [
             _apply_user_answer(answer, submitted[answer.question_id])
             for answer in _answers_in_fixed_order(current.answers)
         ]
-        return await self._repository.update_draft(
+        return self._repository.update_draft(
             assessment=current,
             updates={"answers": _answers_payload(answers)},
         )
@@ -1231,7 +1194,7 @@ class PracticalAssessmentService:
         user: AuthenticatedUser,
         assessment_id: UUID,
     ) -> PracticalAssessment:
-        current = await self._repository.get_by_id(
+        current = self._repository.get_by_id(
             assessment_id=assessment_id,
             user_id=user.id,
         )
@@ -1248,7 +1211,7 @@ class PracticalAssessmentService:
                 "Answer all ten work-assessment questions before evaluation"
             )
 
-        video = await self._repository.download_video(
+        video = self._repository.download_video(
             assessment=current,
             max_bytes=self._max_video_bytes,
         )
@@ -1260,9 +1223,12 @@ class PracticalAssessmentService:
         score_by_competency = {
             item.competency: item.score for item in evaluation.skill_scores
         }
-        overall = int(round(sum(score_by_competency.values()) / len(COMPETENCY_IDS)))
+        overall = int(
+            round(sum(score_by_competency.values()) / len(COMPETENCY_IDS))
+        )
         safety = score_by_competency["safety_procedures"]
         passed = overall >= 70 and safety >= 60
+        now = _utcnow()
         updates: dict[str, Any] = {
             "safety_procedures_score": safety,
             "tool_usage_score": score_by_competency["tool_usage"],
@@ -1278,21 +1244,12 @@ class PracticalAssessmentService:
             "grade": _grade_for_score(overall),
             "passed": passed,
             "evaluation": evaluation.model_dump(mode="json"),
-            "completed_at": datetime.now(UTC).isoformat(),
+            "completed_at": now,
         }
-        return await self._repository.complete(
+        return self._repository.complete(
             assessment=current,
             updates=updates,
         )
-
-
-async def _file_chunks(path: Path) -> AsyncIterator[bytes]:
-    stream = path.open("rb")
-    try:
-        while chunk := await asyncio.to_thread(stream.read, 1024 * 1024):
-            yield chunk
-    finally:
-        stream.close()
 
 
 def _validate_object_path(object_path: str) -> list[str]:
@@ -1320,12 +1277,12 @@ def _video_object_path(
     return f"{user_id}/{assessment_id}/{uuid4().hex}{suffix}"
 
 
-async def _best_effort_delete_video(
-    repository: SupabasePracticalAssessmentRepository,
+def _best_effort_delete_video(
+    repository: SQLitePracticalAssessmentRepository,
     object_path: str,
 ) -> None:
     try:
-        await repository.delete_video(object_path=object_path)
+        repository.delete_video(object_path=object_path)
     except Exception:
         pass
 
@@ -1619,91 +1576,29 @@ def _grade_for_score(score: int) -> str:
     return "F"
 
 
-def _exact_count(response: httpx.Response) -> int:
-    content_range = response.headers.get("content-range")
-    if not content_range or "/" not in content_range:
-        raise PracticalAssessmentProviderError(
-            "Supabase did not return the practical-assessment history count"
-        )
-    count = content_range.rsplit("/", maxsplit=1)[1]
-    try:
-        return int(count)
-    except ValueError as exc:
-        raise PracticalAssessmentProviderError(
-            "Supabase returned an invalid practical-assessment history count"
-        ) from exc
-
-
-def _is_missing_table_response(response: httpx.Response) -> bool:
-    if response.status_code != 404:
-        return False
-    try:
-        body = response.json()
-    except ValueError:
-        return False
-    return isinstance(body, dict) and body.get("code") == "PGRST205"
-
-
-def _is_missing_bucket_response(response: httpx.Response) -> bool:
-    if response.status_code not in {400, 404}:
-        return False
-    try:
-        body = response.json()
-    except ValueError:
-        return False
-    if not isinstance(body, dict):
-        return False
-    text = " ".join(
-        str(body.get(key, "")) for key in ("error", "message", "statusCode")
-    ).casefold()
-    return "bucket" in text and ("not found" in text or "does not exist" in text)
-
-
-def _is_unique_violation(response: httpx.Response) -> bool:
-    if response.status_code not in {400, 409}:
-        return False
-    try:
-        body = response.json()
-    except ValueError:
-        return False
-    return isinstance(body, dict) and body.get("code") == "23505"
-
-
-@lru_cache
-def get_practical_assessment_repository() -> SupabasePracticalAssessmentRepository:
-    settings = get_settings()
-    return SupabasePracticalAssessmentRepository(
-        supabase_url=settings.supabase_url,
-        secret_key=settings.supabase_secret_key,
-        table_name=settings.supabase_practical_assessments_table,
-        video_bucket=settings.supabase_practical_assessment_videos_bucket,
-        timeout_seconds=settings.supabase_request_timeout_seconds,
-        storage_timeout_seconds=(
-            settings.practical_assessment_storage_timeout_seconds
-        ),
-    )
-
-
 @lru_cache
 def get_practical_assessment_analyzer() -> GeminiPracticalAssessmentAnalyzer:
     return GeminiPracticalAssessmentAnalyzer()
 
 
-@lru_cache
-def get_practical_assessment_service() -> PracticalAssessmentService:
-    settings = get_settings()
+def get_practical_assessment_service(
+    session: Annotated[Session, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PracticalAssessmentService:
+    repository = SQLitePracticalAssessmentRepository(
+        session=session,
+        video_directory=resolve_project_path(
+            settings.practical_assessment_video_directory
+        ),
+    )
     return PracticalAssessmentService(
-        repository=get_practical_assessment_repository(),
+        repository=repository,
         analyzer=get_practical_assessment_analyzer(),
         max_video_bytes=settings.practical_assessment_max_video_bytes,
     )
 
 
 async def close_practical_assessment_service() -> None:
-    get_practical_assessment_service.cache_clear()
-    if get_practical_assessment_repository.cache_info().currsize:
-        await get_practical_assessment_repository().close()
-        get_practical_assessment_repository.cache_clear()
     if get_practical_assessment_analyzer.cache_info().currsize:
         await get_practical_assessment_analyzer().close()
         get_practical_assessment_analyzer.cache_clear()

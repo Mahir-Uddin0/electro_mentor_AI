@@ -29,11 +29,9 @@ from app.services.practical_assessments import (
     PracticalAssessmentConfigurationError,
     PracticalAssessmentConflictError,
     PracticalAssessmentIncompleteError,
-    PracticalAssessmentMigrationRequiredError,
     PracticalAssessmentNotFoundError,
     PracticalAssessmentProviderError,
     PracticalAssessmentService,
-    PracticalAssessmentStorageRequiredError,
     UnsupportedAssessmentVideoError,
     get_practical_assessment_service,
     stream_and_validate_video,
@@ -286,24 +284,6 @@ def _conflict(detail: str) -> HTTPException:
 
 
 def _translate_provider_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, PracticalAssessmentMigrationRequiredError):
-        return HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "The Supabase practical-assessment table is missing. Run "
-                "backend/supabase/practical_assessment.sql in the Supabase SQL "
-                "Editor."
-            ),
-        )
-    if isinstance(exc, PracticalAssessmentStorageRequiredError):
-        return HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "The private Supabase practical-assessment video bucket is "
-                "missing. Run backend/supabase/practical_assessment.sql in the "
-                "Supabase SQL Editor."
-            ),
-        )
     if isinstance(exc, PracticalAssessmentConfigurationError):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
