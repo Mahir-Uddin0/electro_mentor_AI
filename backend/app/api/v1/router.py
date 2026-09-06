@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth,
+    chat,
     conversations,
     guides,
     health,
@@ -20,6 +21,7 @@ api_router.include_router(
     prefix="/conversations",
     tags=["conversations"],
 )
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(
     photo_analysis.router,
     prefix="/photo-analysis",

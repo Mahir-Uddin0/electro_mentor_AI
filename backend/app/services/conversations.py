@@ -1,14 +1,18 @@
-"""Supabase persistence and orchestration for multi-conversation chat."""
+"""SQLite persistence and orchestration for multi-conversation chat."""
 
-from functools import lru_cache
-from typing import Literal
-from uuid import UUID
+import json
+from datetime import UTC, datetime
+from typing import Annotated, Literal
+from uuid import UUID, uuid4
 
-import httpx
-from pydantic import TypeAdapter, ValidationError
+from fastapi import Depends
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.security import AuthenticatedUser
+from app.db.models import ChatMessage, Conversation
+from app.db.session import get_db_session
 from app.schemas.chat import ChatResponse, Message, Source
 from app.schemas.conversations import (
     ConversationDetail,
@@ -20,352 +24,240 @@ from app.services.chat import ChatService, get_chat_service
 
 
 class ConversationConfigurationError(RuntimeError):
-    """Raised when the Supabase Data API has not been configured."""
+    """Raised when conversation storage has not been configured."""
 
 
 class ConversationMigrationRequiredError(ConversationConfigurationError):
-    """Raised when the conversation tables do not exist in Supabase."""
+    """Kept for backward-compatible error handling in the endpoint layer."""
 
 
 class ConversationProviderError(RuntimeError):
-    """Raised when Supabase returns an error or malformed data."""
+    """Raised when local conversation persistence fails."""
 
 
 class ConversationNotFoundError(LookupError):
     """Raised when a conversation is absent or does not belong to the user."""
 
 
-_CONVERSATIONS_ADAPTER = TypeAdapter(list[ConversationSummary])
-_MESSAGES_ADAPTER = TypeAdapter(list[ConversationMessage])
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
-class SupabaseConversationRepository:
-    """Access conversations through PostgREST with the user's JWT.
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
-    The publishable key identifies the Supabase project. The user's access token
-    supplies their identity, allowing the database RLS policies to remain the
-    final authorization boundary.
-    """
 
-    def __init__(
-        self,
-        *,
-        supabase_url: str | None,
-        api_key: str | None,
-        conversations_table: str,
-        messages_table: str,
-        timeout_seconds: float,
-        client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._supabase_url = supabase_url.rstrip("/") if supabase_url else None
-        self._api_key = api_key
-        self._conversations_table = conversations_table
-        self._messages_table = messages_table
-        self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+def _to_conversation_summary(record: Conversation) -> ConversationSummary:
+    return ConversationSummary(
+        id=UUID(record.id),
+        user_id=UUID(record.user_id),
+        title=record.title,
+        created_at=_as_utc(record.created_at),
+        updated_at=_as_utc(record.updated_at),
+    )
 
-    def _url(self, table: str) -> str:
-        if not self._supabase_url or not self._api_key:
-            raise ConversationConfigurationError(
-                "SUPABASE_URL and SUPABASE_API_KEY are required"
-            )
-        return f"{self._supabase_url}/rest/v1/{table}"
 
-    def _headers(
-        self,
-        access_token: str,
-        *,
-        return_representation: bool = False,
-    ) -> dict[str, str]:
-        if not self._api_key:
-            raise ConversationConfigurationError("SUPABASE_API_KEY is required")
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "apikey": self._api_key,
-            "Authorization": f"Bearer {access_token}",
-        }
-        if return_representation:
-            headers["Prefer"] = "return=representation"
-        return headers
+def _to_conversation_message(record: ChatMessage) -> ConversationMessage:
+    try:
+        sources = [Source(**s) for s in json.loads(record.sources)]
+    except (json.JSONDecodeError, TypeError, KeyError):
+        sources = []
+    return ConversationMessage(
+        id=UUID(record.id),
+        conversation_id=UUID(record.conversation_id),
+        user_id=UUID(record.user_id),
+        sequence_no=record.sequence_no,
+        role=record.role,
+        content=record.content,
+        sources=sources,
+        created_at=_as_utc(record.created_at),
+    )
 
-    async def list_conversations(
-        self,
-        *,
-        user_id: UUID,
-        access_token: str,
-    ) -> list[ConversationSummary]:
-        response = await self._request(
-            "GET",
-            self._url(self._conversations_table),
-            params={
-                "select": "id,user_id,title,created_at,updated_at",
-                "user_id": f"eq.{user_id}",
-                "order": "updated_at.desc,id.desc",
-            },
-            headers=self._headers(access_token),
+
+class SQLiteConversationRepository:
+    """Persist conversations locally, scoping every operation to the owning user."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_conversations(self, *, user_id: UUID) -> list[ConversationSummary]:
+        try:
+            records = self._session.scalars(
+                select(Conversation)
+                .where(Conversation.user_id == str(user_id))
+                .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+            ).all()
+        except SQLAlchemyError as exc:
+            raise ConversationProviderError(
+                "Could not read conversations from SQLite"
+            ) from exc
+        return [_to_conversation_summary(r) for r in records]
+
+    def create_conversation(
+        self, *, user_id: UUID, title: str
+    ) -> ConversationSummary:
+        now = _utcnow()
+        record = Conversation(
+            id=str(uuid4()),
+            user_id=str(user_id),
+            title=title,
+            created_at=now,
+            updated_at=now,
         )
-        conversations = self._parse_conversations(response)
-        self._assert_conversation_owners(conversations, user_id)
-        return conversations
+        self._session.add(record)
+        try:
+            self._session.commit()
+            self._session.refresh(record)
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise ConversationProviderError(
+                "Could not create conversation in SQLite"
+            ) from exc
+        return _to_conversation_summary(record)
 
-    async def create_conversation(
+    def get_conversation(
+        self, *, conversation_id: UUID, user_id: UUID
+    ) -> ConversationSummary:
+        record = self._get_owned_conversation(
+            conversation_id=conversation_id, user_id=user_id
+        )
+        return _to_conversation_summary(record)
+
+    def rename_conversation(
         self,
         *,
+        conversation_id: UUID,
         user_id: UUID,
-        access_token: str,
         title: str,
     ) -> ConversationSummary:
-        response = await self._request(
-            "POST",
-            self._url(self._conversations_table),
-            json={"user_id": str(user_id), "title": title},
-            headers=self._headers(access_token, return_representation=True),
+        record = self._get_owned_conversation(
+            conversation_id=conversation_id, user_id=user_id
         )
-        conversation = self._one_conversation(response)
-        self._assert_conversation_owners([conversation], user_id)
-        return conversation
+        record.title = title
+        record.updated_at = _utcnow()
+        try:
+            self._session.commit()
+            self._session.refresh(record)
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise ConversationProviderError(
+                "Could not rename conversation in SQLite"
+            ) from exc
+        return _to_conversation_summary(record)
 
-    async def get_conversation(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        access_token: str,
-    ) -> ConversationSummary:
-        response = await self._request(
-            "GET",
-            self._url(self._conversations_table),
-            params={
-                "select": "id,user_id,title,created_at,updated_at",
-                "id": f"eq.{conversation_id}",
-                "user_id": f"eq.{user_id}",
-                "limit": "1",
-            },
-            headers=self._headers(access_token),
-        )
-        conversations = self._parse_conversations(response)
-        if not conversations:
-            raise ConversationNotFoundError("Conversation not found")
-        conversation = conversations[0]
-        self._assert_conversation_owners([conversation], user_id)
-        return conversation
-
-    async def rename_conversation(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        access_token: str,
-        title: str,
-    ) -> ConversationSummary:
-        response = await self._request(
-            "PATCH",
-            self._url(self._conversations_table),
-            params={
-                "id": f"eq.{conversation_id}",
-                "user_id": f"eq.{user_id}",
-            },
-            json={"title": title},
-            headers=self._headers(access_token, return_representation=True),
-        )
-        conversations = self._parse_conversations(response)
-        if not conversations:
-            raise ConversationNotFoundError("Conversation not found")
-        conversation = conversations[0]
-        self._assert_conversation_owners([conversation], user_id)
-        return conversation
-
-    async def delete_conversation(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        access_token: str,
+    def delete_conversation(
+        self, *, conversation_id: UUID, user_id: UUID
     ) -> None:
-        # Resolve ownership first because PostgREST intentionally returns the
-        # same empty success response when RLS hides a row.
-        await self.get_conversation(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            access_token=access_token,
+        record = self._get_owned_conversation(
+            conversation_id=conversation_id, user_id=user_id
         )
-        await self._request(
-            "DELETE",
-            self._url(self._conversations_table),
-            params={
-                "id": f"eq.{conversation_id}",
-                "user_id": f"eq.{user_id}",
-            },
-            headers=self._headers(access_token),
-        )
+        try:
+            self._session.delete(record)
+            self._session.commit()
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise ConversationProviderError(
+                "Could not delete conversation from SQLite"
+            ) from exc
 
-    async def list_messages(
-        self,
-        *,
-        conversation_id: UUID,
-        user_id: UUID,
-        access_token: str,
+    def list_messages(
+        self, *, conversation_id: UUID, user_id: UUID
     ) -> list[ConversationMessage]:
-        response = await self._request(
-            "GET",
-            self._url(self._messages_table),
-            params={
-                "select": (
-                    "id,conversation_id,user_id,sequence_no,role,content,"
-                    "sources,created_at"
-                ),
-                "conversation_id": f"eq.{conversation_id}",
-                "user_id": f"eq.{user_id}",
-                "order": "sequence_no.asc",
-            },
-            headers=self._headers(access_token),
+        # Verify ownership first.
+        self._get_owned_conversation(
+            conversation_id=conversation_id, user_id=user_id
         )
-        messages = self._parse_messages(response)
-        self._assert_message_owners(messages, user_id, conversation_id)
-        return messages
+        try:
+            records = self._session.scalars(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.conversation_id == str(conversation_id),
+                    ChatMessage.user_id == str(user_id),
+                )
+                .order_by(ChatMessage.sequence_no.asc())
+            ).all()
+        except SQLAlchemyError as exc:
+            raise ConversationProviderError(
+                "Could not read messages from SQLite"
+            ) from exc
+        return [_to_conversation_message(r) for r in records]
 
-    async def fetch_recent_messages(
+    def fetch_recent_messages(
         self,
         *,
         conversation_id: UUID,
         user_id: UUID,
-        access_token: str,
         limit: int,
     ) -> list[ConversationMessage]:
-        response = await self._request(
-            "GET",
-            self._url(self._messages_table),
-            params={
-                "select": (
-                    "id,conversation_id,user_id,sequence_no,role,content,"
-                    "sources,created_at"
-                ),
-                "conversation_id": f"eq.{conversation_id}",
-                "user_id": f"eq.{user_id}",
-                "order": "sequence_no.desc",
-                "limit": str(limit),
-            },
-            headers=self._headers(access_token),
-        )
-        messages = self._parse_messages(response)
-        self._assert_message_owners(messages, user_id, conversation_id)
+        try:
+            records = self._session.scalars(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.conversation_id == str(conversation_id),
+                    ChatMessage.user_id == str(user_id),
+                )
+                .order_by(ChatMessage.sequence_no.desc())
+                .limit(limit)
+            ).all()
+        except SQLAlchemyError as exc:
+            raise ConversationProviderError(
+                "Could not read messages from SQLite"
+            ) from exc
+        messages = [_to_conversation_message(r) for r in records]
         messages.reverse()
         return messages
 
-    async def create_message(
+    def create_message(
         self,
         *,
         conversation_id: UUID,
         user_id: UUID,
-        access_token: str,
         role: Literal["user", "assistant"],
         content: str,
         sources: list[Source] | None = None,
     ) -> ConversationMessage:
-        response = await self._request(
-            "POST",
-            self._url(self._messages_table),
-            json={
-                "conversation_id": str(conversation_id),
-                "user_id": str(user_id),
-                "role": role,
-                "content": content,
-                "sources": [source.model_dump(mode="json") for source in sources or []],
-            },
-            headers=self._headers(access_token, return_representation=True),
+        now = _utcnow()
+        record = ChatMessage(
+            id=str(uuid4()),
+            conversation_id=str(conversation_id),
+            user_id=str(user_id),
+            role=role,
+            content=content,
+            sources=json.dumps(
+                [s.model_dump(mode="json") for s in sources or []]
+            ),
+            created_at=now,
         )
-        messages = self._parse_messages(response)
-        if len(messages) != 1:
-            raise ConversationProviderError(
-                "Supabase did not return the inserted message"
-            )
-        message = messages[0]
-        self._assert_message_owners([message], user_id, conversation_id)
-        return message
-
-    async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        self._session.add(record)
         try:
-            response = await self._client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            if self._is_missing_table_response(exc.response):
-                raise ConversationMigrationRequiredError(
-                    "The Supabase conversation migration has not been applied"
-                ) from exc
+            self._session.commit()
+            self._session.refresh(record)
+        except SQLAlchemyError as exc:
+            self._session.rollback()
             raise ConversationProviderError(
-                "Supabase conversation request failed"
+                "Could not create message in SQLite"
             ) from exc
-        except httpx.RequestError as exc:
-            raise ConversationProviderError(
-                "Supabase conversation request failed"
-            ) from exc
+        return _to_conversation_message(record)
 
-    @staticmethod
-    def _is_missing_table_response(response: httpx.Response) -> bool:
-        if response.status_code != 404:
-            return False
+    def _get_owned_conversation(
+        self, *, conversation_id: UUID, user_id: UUID
+    ) -> Conversation:
         try:
-            body = response.json()
-        except ValueError:
-            return False
-        return isinstance(body, dict) and body.get("code") == "PGRST205"
-
-    @staticmethod
-    def _parse_conversations(response: httpx.Response) -> list[ConversationSummary]:
-        try:
-            return _CONVERSATIONS_ADAPTER.validate_python(response.json())
-        except (ValueError, ValidationError) as exc:
+            record = self._session.scalar(
+                select(Conversation).where(
+                    Conversation.id == str(conversation_id),
+                    Conversation.user_id == str(user_id),
+                )
+            )
+        except SQLAlchemyError as exc:
             raise ConversationProviderError(
-                "Supabase returned invalid conversation data"
+                "Could not read conversation from SQLite"
             ) from exc
-
-    @staticmethod
-    def _parse_messages(response: httpx.Response) -> list[ConversationMessage]:
-        try:
-            return _MESSAGES_ADAPTER.validate_python(response.json())
-        except (ValueError, ValidationError) as exc:
-            raise ConversationProviderError(
-                "Supabase returned invalid message data"
-            ) from exc
-
-    @classmethod
-    def _one_conversation(cls, response: httpx.Response) -> ConversationSummary:
-        conversations = cls._parse_conversations(response)
-        if len(conversations) != 1:
-            raise ConversationProviderError(
-                "Supabase did not return the created conversation"
-            )
-        return conversations[0]
-
-    @staticmethod
-    def _assert_conversation_owners(
-        conversations: list[ConversationSummary], user_id: UUID
-    ) -> None:
-        if any(conversation.user_id != user_id for conversation in conversations):
-            raise ConversationProviderError(
-                "Supabase returned another user's conversation"
-            )
-
-    @staticmethod
-    def _assert_message_owners(
-        messages: list[ConversationMessage],
-        user_id: UUID,
-        conversation_id: UUID,
-    ) -> None:
-        if any(
-            message.user_id != user_id
-            or message.conversation_id != conversation_id
-            for message in messages
-        ):
-            raise ConversationProviderError(
-                "Supabase returned messages outside the requested conversation"
-            )
-
-    async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        if record is None:
+            raise ConversationNotFoundError("Conversation not found")
+        return record
 
 
 class ConversationService:
@@ -374,7 +266,7 @@ class ConversationService:
     def __init__(
         self,
         *,
-        repository: SupabaseConversationRepository,
+        repository: SQLiteConversationRepository,
         context_message_limit: int,
         chat_service: ChatService | None = None,
     ) -> None:
@@ -382,57 +274,50 @@ class ConversationService:
         self._chat_service = chat_service
         self._context_message_limit = context_message_limit
 
-    async def list_conversations(
+    def list_conversations(
         self, user: AuthenticatedUser
     ) -> list[ConversationSummary]:
-        return await self._repository.list_conversations(
-            user_id=user.id, access_token=user.access_token
-        )
+        return self._repository.list_conversations(user_id=user.id)
 
-    async def create_conversation(
+    def create_conversation(
         self, user: AuthenticatedUser, title: str
     ) -> ConversationSummary:
-        return await self._repository.create_conversation(
+        return self._repository.create_conversation(
             user_id=user.id,
-            access_token=user.access_token,
             title=title,
         )
 
-    async def get_conversation(
+    def get_conversation(
         self, user: AuthenticatedUser, conversation_id: UUID
     ) -> ConversationDetail:
-        conversation = await self._repository.get_conversation(
+        conversation = self._repository.get_conversation(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
         )
-        messages = await self._repository.list_messages(
+        messages = self._repository.list_messages(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
         )
         return ConversationDetail(**conversation.model_dump(), messages=messages)
 
-    async def rename_conversation(
+    def rename_conversation(
         self,
         user: AuthenticatedUser,
         conversation_id: UUID,
         title: str,
     ) -> ConversationSummary:
-        return await self._repository.rename_conversation(
+        return self._repository.rename_conversation(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
             title=title,
         )
 
-    async def delete_conversation(
+    def delete_conversation(
         self, user: AuthenticatedUser, conversation_id: UUID
     ) -> None:
-        await self._repository.delete_conversation(
+        self._repository.delete_conversation(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
         )
 
     async def send_message(
@@ -441,32 +326,26 @@ class ConversationService:
         conversation_id: UUID,
         message: str,
     ) -> SendConversationMessageResponse:
-        conversation = await self._repository.get_conversation(
+        conversation = self._repository.get_conversation(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
         )
-        # Read context before inserting the new prompt: exactly the configured
-        # number of *prior* messages are supplied to Gemini.
-        recent_messages = await self._repository.fetch_recent_messages(
+        recent_messages = self._repository.fetch_recent_messages(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
             limit=self._context_message_limit,
         )
-        user_message = await self._repository.create_message(
+        user_message = self._repository.create_message(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
             role="user",
             content=message,
         )
 
         if _is_default_title(conversation.title):
-            await self._repository.rename_conversation(
+            self._repository.rename_conversation(
                 conversation_id=conversation_id,
                 user_id=user.id,
-                access_token=user.access_token,
                 title=_title_from_prompt(message),
             )
 
@@ -475,14 +354,13 @@ class ConversationService:
             message=message,
             conversation_id=conversation_id,
             history=[
-                Message(role=history_message.role, content=history_message.content)
-                for history_message in recent_messages
+                Message(role=m.role, content=m.content)
+                for m in recent_messages
             ],
         )
-        assistant_message = await self._repository.create_message(
+        assistant_message = self._repository.create_message(
             conversation_id=conversation_id,
             user_id=user.id,
-            access_token=user.access_token,
             role="assistant",
             content=generated.answer,
             sources=generated.sources,
@@ -493,6 +371,7 @@ class ConversationService:
             assistant_message=assistant_message,
             sources=generated.sources,
         )
+
 
 def _is_default_title(title: str) -> bool:
     return title.strip().casefold() in {
@@ -509,34 +388,16 @@ def _title_from_prompt(prompt: str, max_length: int = 72) -> str:
         return "New chat"
     if len(title) <= max_length:
         return title
-    return f"{title[: max_length - 1].rstrip()}…"
+    return f"{title[: max_length - 1].rstrip()}\u2026"
 
 
-@lru_cache
-def get_conversation_repository() -> SupabaseConversationRepository:
-    settings = get_settings()
-    return SupabaseConversationRepository(
-        supabase_url=settings.supabase_url,
-        api_key=settings.supabase_api_key,
-        conversations_table=settings.supabase_conversations_table,
-        messages_table=settings.supabase_chat_messages_table,
-        timeout_seconds=settings.supabase_request_timeout_seconds,
-    )
+def get_conversation_service(
+    session: Annotated[Session, Depends(get_db_session)],
+) -> ConversationService:
+    from app.core.config import get_settings
 
-
-@lru_cache
-def get_conversation_service() -> ConversationService:
     settings = get_settings()
     return ConversationService(
-        repository=get_conversation_repository(),
+        repository=SQLiteConversationRepository(session),
         context_message_limit=settings.chat_history_message_limit,
     )
-
-
-async def close_conversation_repository() -> None:
-    get_conversation_service.cache_clear()
-    if not get_conversation_repository.cache_info().currsize:
-        return
-    repository = get_conversation_repository()
-    await repository.close()
-    get_conversation_repository.cache_clear()

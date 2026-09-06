@@ -1,109 +1,62 @@
-"""Read an authenticated user's recent messages from Supabase."""
+"""Read an authenticated user's recent messages from the local SQLite database."""
 
-from functools import lru_cache
+import json
+from datetime import UTC, datetime
 from uuid import UUID
 
-import httpx
-from pydantic import TypeAdapter, ValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.db.models import ChatMessage
 from app.schemas.chat_history import ChatHistoryMessage
 
 
 class ChatHistoryConfigurationError(RuntimeError):
-    """Raised when the Supabase Data API is not configured."""
+    """Raised when chat history storage is not configured."""
 
 
 class ChatHistoryProviderError(RuntimeError):
-    """Raised when Supabase cannot provide valid chat-history data."""
+    """Raised when the local database cannot provide valid chat-history data."""
 
 
-_MESSAGES_ADAPTER = TypeAdapter(list[ChatHistoryMessage])
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
-class SupabaseChatHistoryService:
-    """Fetch recent messages through PostgREST using the user's JWT for RLS."""
+class SQLiteChatHistoryService:
+    """Fetch recent messages from the local SQLite database."""
 
-    def __init__(
-        self,
-        *,
-        supabase_url: str | None,
-        api_key: str | None,
-        table_name: str,
-        message_limit: int,
-        timeout_seconds: float,
-        client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._supabase_url = supabase_url.rstrip("/") if supabase_url else None
-        self._api_key = api_key
-        self._table_name = table_name
+    def __init__(self, session: Session, *, message_limit: int) -> None:
+        self._session = session
         self._message_limit = message_limit
-        self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
 
-    async def fetch_recent(
-        self,
-        *,
-        user_id: UUID,
-        access_token: str,
-    ) -> list[ChatHistoryMessage]:
-        if not self._supabase_url or not self._api_key:
-            raise ChatHistoryConfigurationError(
-                "SUPABASE_URL and SUPABASE_API_KEY are required"
-            )
-
+    def fetch_recent(self, *, user_id: UUID) -> list[ChatHistoryMessage]:
+        """Return the most recent messages across all conversations for a user."""
         try:
-            response = await self._client.get(
-                f"{self._supabase_url}/rest/v1/{self._table_name}",
-                params={
-                    "select": "id,user_id,role,content,created_at",
-                    "user_id": f"eq.{user_id}",
-                    "order": "created_at.desc",
-                    "limit": str(self._message_limit),
-                },
-                headers={
-                    "Accept": "application/json",
-                    "apikey": self._api_key,
-                    "Authorization": f"Bearer {access_token}",
-                },
-            )
-            response.raise_for_status()
-            messages = _MESSAGES_ADAPTER.validate_python(response.json())
-        except (httpx.HTTPError, ValueError, ValidationError) as exc:
+            records = self._session.scalars(
+                select(ChatMessage)
+                .where(ChatMessage.user_id == str(user_id))
+                .order_by(ChatMessage.created_at.desc())
+                .limit(self._message_limit)
+            ).all()
+        except SQLAlchemyError as exc:
             raise ChatHistoryProviderError(
-                "Supabase chat-history request failed"
+                "Could not read chat history from SQLite"
             ) from exc
 
-        if any(message.user_id != user_id for message in messages):
-            raise ChatHistoryProviderError(
-                "Supabase returned chat history for a different user"
+        messages = [
+            ChatHistoryMessage(
+                id=UUID(record.id),
+                user_id=UUID(record.user_id),
+                role=record.role,
+                content=record.content,
+                created_at=_as_utc(record.created_at),
             )
-
-        # Descending order makes LIMIT select the newest messages. Return them
-        # chronologically so they are ready for future prompt construction.
+            for record in records
+        ]
+        # Descending order selects the newest; reverse for chronological.
         messages.reverse()
         return messages
-
-    async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
-
-
-@lru_cache
-def get_chat_history_service() -> SupabaseChatHistoryService:
-    settings = get_settings()
-    return SupabaseChatHistoryService(
-        supabase_url=settings.supabase_url,
-        api_key=settings.supabase_api_key,
-        table_name=settings.supabase_chat_messages_table,
-        message_limit=settings.chat_history_message_limit,
-        timeout_seconds=settings.supabase_request_timeout_seconds,
-    )
-
-
-async def close_chat_history_service() -> None:
-    if not get_chat_history_service.cache_info().currsize:
-        return
-    service = get_chat_history_service()
-    await service.close()
-    get_chat_history_service.cache_clear()

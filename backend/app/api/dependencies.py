@@ -18,10 +18,8 @@ from app.db.models import User
 from app.db.session import get_db_session
 from app.schemas.chat_history import ChatHistoryMessage
 from app.services.chat_history import (
-    ChatHistoryConfigurationError,
     ChatHistoryProviderError,
-    SupabaseChatHistoryService,
-    get_chat_history_service,
+    SQLiteChatHistoryService,
 )
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -86,26 +84,19 @@ class AuthenticatedChatContext:
     messages: list[ChatHistoryMessage]
 
 
-async def get_authenticated_chat_context(
+def get_authenticated_chat_context(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    history_service: Annotated[
-        SupabaseChatHistoryService,
-        Depends(get_chat_history_service),
-    ],
+    session: Annotated[Session, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthenticatedChatContext:
+    history_service = SQLiteChatHistoryService(
+        session, message_limit=settings.chat_history_message_limit
+    )
     try:
-        messages = await history_service.fetch_recent(
-            user_id=user.id,
-            access_token=user.access_token,
-        )
-    except ChatHistoryConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase chat history is not configured.",
-        ) from exc
+        messages = history_service.fetch_recent(user_id=user.id)
     except ChatHistoryProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Supabase chat history is temporarily unavailable.",
+            detail="Chat history is temporarily unavailable.",
         ) from exc
     return AuthenticatedChatContext(user=user, messages=messages)

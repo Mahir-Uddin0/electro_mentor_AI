@@ -12,7 +12,6 @@ from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.chat_history import ChatHistoryResponse
 from app.schemas.conversations import ConversationCreate
 from app.services.conversations import (
-    ConversationConfigurationError,
     ConversationNotFoundError,
     ConversationProviderError,
     ConversationService,
@@ -24,7 +23,7 @@ router = APIRouter()
 
 
 @router.get("/history", response_model=ChatHistoryResponse)
-async def get_chat_history(
+def get_chat_history(
     context: Annotated[
         AuthenticatedChatContext,
         Depends(get_authenticated_chat_context),
@@ -45,7 +44,7 @@ async def create_chat_completion(
     try:
         conversation_id = request.conversation_id
         if conversation_id is None:
-            conversation = await service.create_conversation(
+            conversation = service.create_conversation(
                 user, ConversationCreate().title
             )
             conversation_id = conversation.id
@@ -59,11 +58,6 @@ async def create_chat_completion(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found.",
-        ) from exc
-    except ConversationConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase conversation storage is not configured.",
         ) from exc
     except ConversationProviderError as exc:
         raise HTTPException(

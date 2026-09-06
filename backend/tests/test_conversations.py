@@ -1,25 +1,57 @@
+"""Tests for SQLite conversation repository and service."""
+
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-import httpx
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session
 
 from app.core.security import AuthenticatedUser
+from app.db.base import Base
+from app.db.models import Conversation, User
 from app.main import app
 from app.schemas.chat import ChatResponse, Message, Source
 from app.schemas.conversations import ConversationMessage, ConversationSummary
 from app.services.conversations import (
-    ConversationMigrationRequiredError,
+    ConversationNotFoundError,
     ConversationService,
-    SupabaseConversationRepository,
+    SQLiteConversationRepository,
 )
 from app.services.llm import LLMProviderError
 
 USER_ID = UUID("d2f7c64a-3e56-4d45-a47d-07331e2a95df")
 CONVERSATION_ID = UUID("11111111-2222-4333-8444-555555555555")
 NOW = datetime.now(UTC)
+
+
+@pytest.fixture()
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def enable_fk(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        now = datetime.now(UTC).replace(tzinfo=None)
+        session.add(
+            User(
+                id=str(USER_ID),
+                email="learner@example.com",
+                password_hash="placeholder",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+        yield session
 
 
 def _conversation(title: str = "New chat") -> ConversationSummary:
@@ -61,96 +93,109 @@ def _user() -> AuthenticatedUser:
     )
 
 
-def test_recent_messages_are_scoped_ordered_and_authenticated() -> None:
-    source = {
-        "id": "section-1",
-        "title": "Safe isolation",
-        "excerpt": "Turn off and verify the supply.",
-    }
+# ---------------------------------------------------------------------------
+# Repository integration tests (SQLite)
+# ---------------------------------------------------------------------------
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/rest/v1/chat_messages"
-        assert request.headers["apikey"] == "publishable-key"
-        assert request.headers["authorization"] == "Bearer user-jwt"
-        assert request.url.params["conversation_id"] == f"eq.{CONVERSATION_ID}"
-        assert request.url.params["user_id"] == f"eq.{USER_ID}"
-        assert request.url.params["order"] == "sequence_no.desc"
-        assert request.url.params["limit"] == "7"
-        return httpx.Response(
-            200,
-            json=[
-                {
-                    "id": str(UUID(int=sequence_no)),
-                    "conversation_id": str(CONVERSATION_ID),
-                    "user_id": str(USER_ID),
-                    "sequence_no": sequence_no,
-                    "role": "assistant" if sequence_no % 2 == 0 else "user",
-                    "content": f"Message {sequence_no}",
-                    "sources": [source] if sequence_no == 8 else [],
-                    "created_at": (
-                        NOW + timedelta(seconds=sequence_no)
-                    ).isoformat(),
-                }
-                for sequence_no in range(9, 2, -1)
-            ],
+
+def test_create_and_list_conversations(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    created = repo.create_conversation(user_id=USER_ID, title="First chat")
+    assert created.title == "First chat"
+    assert created.user_id == USER_ID
+
+    conversations = repo.list_conversations(user_id=USER_ID)
+    assert len(conversations) == 1
+    assert conversations[0].id == created.id
+
+
+def test_rename_conversation(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    created = repo.create_conversation(user_id=USER_ID, title="Old title")
+    renamed = repo.rename_conversation(
+        conversation_id=created.id, user_id=USER_ID, title="New title"
+    )
+    assert renamed.title == "New title"
+
+
+def test_delete_conversation(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    created = repo.create_conversation(user_id=USER_ID, title="To delete")
+    repo.delete_conversation(conversation_id=created.id, user_id=USER_ID)
+    assert repo.list_conversations(user_id=USER_ID) == []
+
+
+def test_get_nonexistent_conversation_raises(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    with pytest.raises(ConversationNotFoundError):
+        repo.get_conversation(conversation_id=uuid4(), user_id=USER_ID)
+
+
+def test_create_and_list_messages(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    conv = repo.create_conversation(user_id=USER_ID, title="Chat")
+    user_msg = repo.create_message(
+        conversation_id=conv.id, user_id=USER_ID, role="user", content="Hello"
+    )
+    assistant_msg = repo.create_message(
+        conversation_id=conv.id,
+        user_id=USER_ID,
+        role="assistant",
+        content="Hi there!",
+        sources=[Source(id="s1", title="Guide", excerpt="Excerpt")],
+    )
+    messages = repo.list_messages(conversation_id=conv.id, user_id=USER_ID)
+    assert len(messages) == 2
+    assert messages[0].role == "user"
+    assert messages[1].role == "assistant"
+    assert messages[1].sources[0].id == "s1"
+
+
+def test_fetch_recent_messages_respects_limit(db_session: Session) -> None:
+    repo = SQLiteConversationRepository(db_session)
+    conv = repo.create_conversation(user_id=USER_ID, title="Chat")
+    for i in range(10):
+        repo.create_message(
+            conversation_id=conv.id,
+            user_id=USER_ID,
+            role="user",
+            content=f"Message {i}",
         )
-
-    async def run() -> list[ConversationMessage]:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabaseConversationRepository(
-                supabase_url="https://example-project.supabase.co",
-                api_key="publishable-key",
-                conversations_table="conversations",
-                messages_table="chat_messages",
-                timeout_seconds=10,
-                client=client,
-            )
-            return await repository.fetch_recent_messages(
-                conversation_id=CONVERSATION_ID,
-                user_id=USER_ID,
-                access_token="user-jwt",
-                limit=7,
-            )
-
-    messages = asyncio.run(run())
-    assert [message.sequence_no for message in messages] == list(range(3, 10))
-    assert messages[5].sources[0].id == "section-1"
+    recent = repo.fetch_recent_messages(
+        conversation_id=conv.id, user_id=USER_ID, limit=3
+    )
+    assert len(recent) == 3
+    assert recent[0].content == "Message 7"
+    assert recent[2].content == "Message 9"
 
 
-def test_missing_supabase_tables_report_required_migration() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            404,
-            json={
-                "code": "PGRST205",
-                "message": (
-                    "Could not find the table 'public.conversations' "
-                    "in the schema cache"
-                ),
-            },
+def test_cross_user_isolation(db_session: Session) -> None:
+    other_user_id = uuid4()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    db_session.add(
+        User(
+            id=str(other_user_id),
+            email="other@example.com",
+            password_hash="placeholder",
+            is_active=True,
+            created_at=now,
+            updated_at=now,
         )
+    )
+    db_session.commit()
 
-    async def run() -> None:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            repository = SupabaseConversationRepository(
-                supabase_url="https://example-project.supabase.co",
-                api_key="publishable-key",
-                conversations_table="conversations",
-                messages_table="chat_messages",
-                timeout_seconds=10,
-                client=client,
-            )
-            await repository.list_conversations(
-                user_id=USER_ID,
-                access_token="user-jwt",
-            )
+    repo = SQLiteConversationRepository(db_session)
+    conv = repo.create_conversation(user_id=USER_ID, title="My chat")
 
-    with pytest.raises(ConversationMigrationRequiredError):
-        asyncio.run(run())
+    with pytest.raises(ConversationNotFoundError):
+        repo.get_conversation(conversation_id=conv.id, user_id=other_user_id)
+
+    assert repo.list_conversations(user_id=other_user_id) == []
+
+
+# ---------------------------------------------------------------------------
+# Service-level tests (FakeRepository)
+# ---------------------------------------------------------------------------
 
 
 class FakeRepository:
@@ -167,16 +212,16 @@ class FakeRepository:
             for sequence_no in range(1, 8)
         ]
 
-    async def get_conversation(self, **_: object) -> ConversationSummary:
+    def get_conversation(self, **_: object) -> ConversationSummary:
         return _conversation()
 
-    async def fetch_recent_messages(
+    def fetch_recent_messages(
         self, *, limit: int, **_: object
     ) -> list[ConversationMessage]:
         self.context_limit = limit
         return self.prior
 
-    async def create_message(
+    def create_message(
         self,
         *,
         role: Literal["user", "assistant"],
@@ -189,7 +234,7 @@ class FakeRepository:
             7 + len(self.created), role, content, sources=sources
         )
 
-    async def rename_conversation(
+    def rename_conversation(
         self, *, title: str, **_: object
     ) -> ConversationSummary:
         self.renamed_to = title
@@ -268,10 +313,10 @@ def test_user_turn_remains_persisted_when_gemini_fails() -> None:
     assert [entry[0] for entry in repository.created] == ["user"]
 
 
-def test_only_conversation_routes_are_public_for_chat() -> None:
+def test_conversation_and_chat_routes_are_registered() -> None:
     paths = app.openapi()["paths"]
     assert "/api/v1/conversations" in paths
     assert "/api/v1/conversations/{conversation_id}" in paths
     assert "/api/v1/conversations/{conversation_id}/messages" in paths
-    assert "/api/v1/chat" not in paths
-    assert "/api/v1/chat/history" not in paths
+    assert "/api/v1/chat" in paths
+    assert "/api/v1/chat/history" in paths

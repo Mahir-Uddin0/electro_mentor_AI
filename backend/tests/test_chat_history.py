@@ -1,79 +1,89 @@
-import asyncio
+"""Tests for SQLiteChatHistoryService."""
+
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
-import httpx
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session
 
+from app.db.base import Base
+from app.db.models import ChatMessage, Conversation, User
 from app.services.chat_history import (
-    ChatHistoryConfigurationError,
-    SupabaseChatHistoryService,
+    ChatHistoryProviderError,
+    SQLiteChatHistoryService,
 )
 
 USER_ID = UUID("d2f7c64a-3e56-4d45-a47d-07331e2a95df")
 
 
-def test_fetches_latest_messages_with_user_jwt_and_returns_chronologically() -> None:
-    now = datetime.now(UTC)
+@pytest.fixture()
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["apikey"] == "publishable-key"
-        assert request.headers["authorization"] == "Bearer user-jwt"
-        assert request.url.params["user_id"] == f"eq.{USER_ID}"
-        assert request.url.params["order"] == "created_at.desc"
-        assert request.url.params["limit"] == "7"
-        return httpx.Response(
-            200,
-            json=[
-                {
-                    "id": "fe12b6da-fd24-4b56-b26f-213905415aa7",
-                    "user_id": str(USER_ID),
-                    "role": "assistant",
-                    "content": "Newest",
-                    "created_at": now.isoformat(),
-                },
-                {
-                    "id": "cbec015a-e425-4d96-8a63-09e88242a7a0",
-                    "user_id": str(USER_ID),
-                    "role": "user",
-                    "content": "Older",
-                    "created_at": (now - timedelta(minutes=1)).isoformat(),
-                },
-            ],
+    @event.listens_for(engine, "connect")
+    def enable_fk(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        # Seed a user.
+        now = datetime.now(UTC).replace(tzinfo=None)
+        session.add(
+            User(
+                id=str(USER_ID),
+                email="learner@example.com",
+                password_hash="placeholder",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
         )
-
-    async def run() -> list[str]:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        ) as client:
-            service = SupabaseChatHistoryService(
-                supabase_url="https://example-project.supabase.co",
-                api_key="publishable-key",
-                table_name="chat_messages",
-                message_limit=7,
-                timeout_seconds=10,
-                client=client,
-            )
-            messages = await service.fetch_recent(
-                user_id=USER_ID,
-                access_token="user-jwt",
-            )
-            return [message.content for message in messages]
-
-    assert asyncio.run(run()) == ["Older", "Newest"]
+        session.commit()
+        yield session
 
 
-def test_requires_supabase_data_api_configuration() -> None:
-    service = SupabaseChatHistoryService(
-        supabase_url=None,
-        api_key=None,
-        table_name="chat_messages",
-        message_limit=7,
-        timeout_seconds=10,
+def test_fetches_latest_messages_and_returns_chronologically(db_session: Session) -> None:
+    now = datetime.now(UTC).replace(tzinfo=None)
+    conv_id = str(uuid4())
+    db_session.add(
+        Conversation(
+            id=conv_id,
+            user_id=str(USER_ID),
+            title="Test conversation",
+            created_at=now,
+            updated_at=now,
+        )
     )
+    db_session.commit()
 
-    with pytest.raises(ChatHistoryConfigurationError):
-        asyncio.run(
-            service.fetch_recent(user_id=USER_ID, access_token="user-jwt")
+    # Insert 10 messages; limit=7 should return the 7 most recent.
+    for i in range(1, 11):
+        db_session.add(
+            ChatMessage(
+                id=str(uuid4()),
+                conversation_id=conv_id,
+                user_id=str(USER_ID),
+                role="user" if i % 2 else "assistant",
+                content=f"Message {i}",
+                sources="[]",
+                created_at=now + timedelta(seconds=i),
+            )
         )
-    asyncio.run(service.close())
+        db_session.commit()
+
+    service = SQLiteChatHistoryService(db_session, message_limit=7)
+    messages = service.fetch_recent(user_id=USER_ID)
+
+    assert len(messages) == 7
+    contents = [m.content for m in messages]
+    # Oldest first (chronological order).
+    assert contents == [f"Message {i}" for i in range(4, 11)]
+
+
+def test_empty_history_returns_empty_list(db_session: Session) -> None:
+    service = SQLiteChatHistoryService(db_session, message_limit=7)
+    messages = service.fetch_recent(user_id=USER_ID)
+    assert messages == []
