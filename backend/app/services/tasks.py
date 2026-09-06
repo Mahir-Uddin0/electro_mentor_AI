@@ -1,15 +1,17 @@
-"""Supabase persistence and business rules for the task tracker."""
+"""SQLite persistence and business rules for the task tracker."""
 
-from datetime import date
-from functools import lru_cache
-from typing import Any
-from uuid import UUID
+from datetime import UTC, date, datetime
+from typing import Annotated, Any, Protocol
+from uuid import UUID, uuid4
 
-import httpx
-from pydantic import TypeAdapter, ValidationError
+from fastapi import Depends
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.security import AuthenticatedUser
+from app.db.models import TaskRecord
+from app.db.session import get_db_session
 from app.schemas.tasks import (
     TaskCreate,
     TaskItem,
@@ -19,16 +21,8 @@ from app.schemas.tasks import (
 )
 
 
-class TaskConfigurationError(RuntimeError):
-    """Raised when Supabase task storage has not been configured."""
-
-
-class TaskMigrationRequiredError(TaskConfigurationError):
-    """Raised when the task table does not exist in Supabase."""
-
-
-class TaskProviderError(RuntimeError):
-    """Raised when Supabase returns an error or malformed data."""
+class TaskStorageError(RuntimeError):
+    """Raised when local task persistence fails."""
 
 
 class TaskNotFoundError(LookupError):
@@ -39,230 +33,171 @@ class TaskConflictError(RuntimeError):
     """Raised for invalid transitions or concurrent task status changes."""
 
 
-_TASKS_ADAPTER = TypeAdapter(list[TaskItem])
-_TASK_SELECT = (
-    "id,user_id,title,description,status,priority,due_date,created_at,"
-    "updated_at,completed_at"
-)
+class TaskRepository(Protocol):
+    def list_tasks(self, *, user_id: UUID) -> list[TaskItem]: ...
 
+    def create_task(self, *, user_id: UUID, task: TaskCreate) -> TaskItem: ...
 
-class SupabaseTaskRepository:
-    """Access tasks through PostgREST using the signed-in user's JWT."""
+    def get_task(self, *, task_id: UUID, user_id: UUID) -> TaskItem: ...
 
-    def __init__(
+    def update_task(
         self,
         *,
-        supabase_url: str | None,
-        api_key: str | None,
-        tasks_table: str,
-        timeout_seconds: float,
-        client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._supabase_url = supabase_url.rstrip("/") if supabase_url else None
-        self._api_key = api_key
-        self._tasks_table = tasks_table
-        self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        task_id: UUID,
+        user_id: UUID,
+        updates: dict[str, Any],
+        expected_status: TaskStatus | None = None,
+    ) -> TaskItem: ...
 
-    def _url(self) -> str:
-        if not self._supabase_url or not self._api_key:
-            raise TaskConfigurationError(
-                "SUPABASE_URL and SUPABASE_API_KEY are required"
-            )
-        return f"{self._supabase_url}/rest/v1/{self._tasks_table}"
+    def delete_task(self, *, task_id: UUID, user_id: UUID) -> None: ...
 
-    def _headers(
-        self,
-        access_token: str,
-        *,
-        return_representation: bool = False,
-    ) -> dict[str, str]:
-        if not self._api_key:
-            raise TaskConfigurationError("SUPABASE_API_KEY is required")
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "apikey": self._api_key,
-            "Authorization": f"Bearer {access_token}",
+
+def _utcnow() -> datetime:
+    # SQLite stores UTC timestamps without an offset.
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
+def _to_task_item(record: TaskRecord) -> TaskItem:
+    return TaskItem.model_validate(
+        {
+            "id": record.id,
+            "user_id": record.user_id,
+            "title": record.title,
+            "description": record.description,
+            "status": record.status,
+            "priority": record.priority,
+            "due_date": record.due_date,
+            "created_at": _as_utc(record.created_at),
+            "updated_at": _as_utc(record.updated_at),
+            "completed_at": _as_utc(record.completed_at),
         }
-        if return_representation:
-            headers["Prefer"] = "return=representation"
-        return headers
+    )
 
-    async def list_tasks(
-        self,
-        *,
-        user_id: UUID,
-        access_token: str,
-    ) -> list[TaskItem]:
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _TASK_SELECT,
-                "user_id": f"eq.{user_id}",
-                "order": "updated_at.desc,id.desc",
-            },
-            headers=self._headers(access_token),
+
+class SQLiteTaskRepository:
+    """Persist tasks locally, scoping every operation to the owning user."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_tasks(self, *, user_id: UUID) -> list[TaskItem]:
+        try:
+            records = self._session.scalars(
+                select(TaskRecord).where(TaskRecord.user_id == str(user_id))
+            ).all()
+        except SQLAlchemyError as exc:
+            raise TaskStorageError("Could not read tasks from SQLite") from exc
+        return [_to_task_item(record) for record in records]
+
+    def create_task(self, *, user_id: UUID, task: TaskCreate) -> TaskItem:
+        now = _utcnow()
+        record = TaskRecord(
+            id=str(uuid4()),
+            user_id=str(user_id),
+            title=task.title,
+            description=task.description,
+            status=task.status,
+            priority=task.priority,
+            due_date=task.due_date,
+            created_at=now,
+            updated_at=now,
+            completed_at=now if task.status == "completed" else None,
         )
-        tasks = self._parse_tasks(response)
-        self._assert_owners(tasks, user_id)
-        return tasks
+        self._session.add(record)
+        try:
+            self._session.commit()
+            self._session.refresh(record)
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise TaskStorageError("Could not create task in SQLite") from exc
+        return _to_task_item(record)
 
-    async def create_task(
-        self,
-        *,
-        user_id: UUID,
-        access_token: str,
-        task: TaskCreate,
-    ) -> TaskItem:
-        response = await self._request(
-            "POST",
-            self._url(),
-            json={"user_id": str(user_id), **task.model_dump(mode="json")},
-            headers=self._headers(access_token, return_representation=True),
-        )
-        created = self._one_task(response, action="created")
-        self._assert_owners([created], user_id)
-        return created
+    def get_task(self, *, task_id: UUID, user_id: UUID) -> TaskItem:
+        record = self._get_owned_record(task_id=task_id, user_id=user_id)
+        return _to_task_item(record)
 
-    async def get_task(
+    def update_task(
         self,
         *,
         task_id: UUID,
         user_id: UUID,
-        access_token: str,
-    ) -> TaskItem:
-        response = await self._request(
-            "GET",
-            self._url(),
-            params={
-                "select": _TASK_SELECT,
-                "id": f"eq.{task_id}",
-                "user_id": f"eq.{user_id}",
-                "limit": "1",
-            },
-            headers=self._headers(access_token),
-        )
-        tasks = self._parse_tasks(response)
-        if not tasks:
-            raise TaskNotFoundError("Task not found")
-        task = tasks[0]
-        self._assert_owners([task], user_id)
-        return task
-
-    async def update_task(
-        self,
-        *,
-        task_id: UUID,
-        user_id: UUID,
-        access_token: str,
         updates: dict[str, Any],
         expected_status: TaskStatus | None = None,
     ) -> TaskItem:
-        params = {
-            "id": f"eq.{task_id}",
-            "user_id": f"eq.{user_id}",
-        }
+        values = dict(updates)
+        values["updated_at"] = _utcnow()
+        if values.get("status") == "completed":
+            values["completed_at"] = func.coalesce(
+                TaskRecord.completed_at,
+                _utcnow(),
+            )
+        elif "status" in values:
+            values["completed_at"] = None
+
+        statement = update(TaskRecord).where(
+            TaskRecord.id == str(task_id),
+            TaskRecord.user_id == str(user_id),
+        )
         if expected_status is not None:
-            # Compare-and-set prevents two requests from moving the same task
-            # through conflicting status transitions.
-            params["status"] = f"eq.{expected_status}"
+            # Compare-and-set prevents competing requests from applying a
+            # transition based on stale task state.
+            statement = statement.where(TaskRecord.status == expected_status)
 
-        response = await self._request(
-            "PATCH",
-            self._url(),
-            params=params,
-            json=updates,
-            headers=self._headers(access_token, return_representation=True),
-        )
-        tasks = self._parse_tasks(response)
-        if not tasks:
-            if expected_status is not None:
-                await self.get_task(
-                    task_id=task_id,
-                    user_id=user_id,
-                    access_token=access_token,
+        try:
+            result = self._session.execute(statement.values(**values))
+            if result.rowcount != 1:
+                self._session.rollback()
+                if expected_status is not None:
+                    self._get_owned_record(task_id=task_id, user_id=user_id)
+                    raise TaskConflictError(
+                        "The task status changed while the update was in progress"
+                    )
+                raise TaskNotFoundError("Task not found")
+            self._session.commit()
+            return self.get_task(task_id=task_id, user_id=user_id)
+        except (TaskConflictError, TaskNotFoundError):
+            raise
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise TaskStorageError("Could not update task in SQLite") from exc
+
+    def delete_task(self, *, task_id: UUID, user_id: UUID) -> None:
+        try:
+            result = self._session.execute(
+                delete(TaskRecord).where(
+                    TaskRecord.id == str(task_id),
+                    TaskRecord.user_id == str(user_id),
                 )
-                raise TaskConflictError(
-                    "The task status changed while the update was in progress"
+            )
+            if result.rowcount != 1:
+                self._session.rollback()
+                raise TaskNotFoundError("Task not found")
+            self._session.commit()
+        except TaskNotFoundError:
+            raise
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise TaskStorageError("Could not delete task from SQLite") from exc
+
+    def _get_owned_record(self, *, task_id: UUID, user_id: UUID) -> TaskRecord:
+        try:
+            record = self._session.scalar(
+                select(TaskRecord).where(
+                    TaskRecord.id == str(task_id),
+                    TaskRecord.user_id == str(user_id),
                 )
+            )
+        except SQLAlchemyError as exc:
+            raise TaskStorageError("Could not read task from SQLite") from exc
+        if record is None:
             raise TaskNotFoundError("Task not found")
-
-        updated = self._one_task(response, action="updated")
-        self._assert_owners([updated], user_id)
-        return updated
-
-    async def delete_task(
-        self,
-        *,
-        task_id: UUID,
-        user_id: UUID,
-        access_token: str,
-    ) -> None:
-        # PostgREST returns an empty success when RLS hides a row. Resolve it
-        # first so callers still receive an accurate 404 response.
-        await self.get_task(
-            task_id=task_id,
-            user_id=user_id,
-            access_token=access_token,
-        )
-        await self._request(
-            "DELETE",
-            self._url(),
-            params={
-                "id": f"eq.{task_id}",
-                "user_id": f"eq.{user_id}",
-            },
-            headers=self._headers(access_token),
-        )
-
-    async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
-        try:
-            response = await self._client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            if self._is_missing_table_response(exc.response):
-                raise TaskMigrationRequiredError(
-                    "The Supabase task migration has not been applied"
-                ) from exc
-            raise TaskProviderError("Supabase task request failed") from exc
-        except httpx.RequestError as exc:
-            raise TaskProviderError("Supabase task request failed") from exc
-
-    @staticmethod
-    def _is_missing_table_response(response: httpx.Response) -> bool:
-        if response.status_code != 404:
-            return False
-        try:
-            body = response.json()
-        except ValueError:
-            return False
-        return isinstance(body, dict) and body.get("code") == "PGRST205"
-
-    @staticmethod
-    def _parse_tasks(response: httpx.Response) -> list[TaskItem]:
-        try:
-            return _TASKS_ADAPTER.validate_python(response.json())
-        except (ValueError, ValidationError) as exc:
-            raise TaskProviderError("Supabase returned invalid task data") from exc
-
-    @classmethod
-    def _one_task(cls, response: httpx.Response, *, action: str) -> TaskItem:
-        tasks = cls._parse_tasks(response)
-        if len(tasks) != 1:
-            raise TaskProviderError(f"Supabase did not return the {action} task")
-        return tasks[0]
-
-    @staticmethod
-    def _assert_owners(tasks: list[TaskItem], user_id: UUID) -> None:
-        if any(task.user_id != user_id for task in tasks):
-            raise TaskProviderError("Supabase returned another user's task")
-
-    async def close(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        return record
 
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
@@ -283,41 +218,30 @@ _PRIORITY_ORDER: dict[TaskPriority, int] = {
 
 
 class TaskService:
-    """Apply task workflow rules around the Supabase repository."""
+    """Apply task workflow and ownership rules around local persistence."""
 
-    def __init__(self, *, repository: SupabaseTaskRepository) -> None:
+    def __init__(self, *, repository: TaskRepository) -> None:
         self._repository = repository
 
-    async def list_tasks(self, user: AuthenticatedUser) -> list[TaskItem]:
-        tasks = await self._repository.list_tasks(
-            user_id=user.id,
-            access_token=user.access_token,
-        )
+    def list_tasks(self, user: AuthenticatedUser) -> list[TaskItem]:
+        tasks = self._repository.list_tasks(user_id=user.id)
         return sorted(tasks, key=_task_sort_key)
 
-    async def create_task(
+    def create_task(
         self,
         user: AuthenticatedUser,
         task: TaskCreate,
     ) -> TaskItem:
-        return await self._repository.create_task(
-            user_id=user.id,
-            access_token=user.access_token,
-            task=task,
-        )
+        return self._repository.create_task(user_id=user.id, task=task)
 
-    async def update_task(
+    def update_task(
         self,
         user: AuthenticatedUser,
         task_id: UUID,
         request: TaskUpdate,
     ) -> TaskItem:
-        current = await self._repository.get_task(
-            task_id=task_id,
-            user_id=user.id,
-            access_token=user.access_token,
-        )
-        updates = request.model_dump(exclude_unset=True, mode="json")
+        current = self._repository.get_task(task_id=task_id, user_id=user.id)
+        updates = request.model_dump(exclude_unset=True, mode="python")
 
         expected_status: TaskStatus | None = None
         if "status" in request.model_fields_set:
@@ -331,29 +255,23 @@ class TaskService:
                 )
             expected_status = current.status
 
-        return await self._repository.update_task(
+        return self._repository.update_task(
             task_id=task_id,
             user_id=user.id,
-            access_token=user.access_token,
             updates=updates,
             expected_status=expected_status,
         )
 
-    async def delete_task(
+    def delete_task(
         self,
         user: AuthenticatedUser,
         task_id: UUID,
     ) -> None:
-        await self._repository.delete_task(
-            task_id=task_id,
-            user_id=user.id,
-            access_token=user.access_token,
-        )
+        self._repository.delete_task(task_id=task_id, user_id=user.id)
 
 
 def _task_sort_key(task: TaskItem) -> tuple[int, int, int, float]:
     """Group by workflow, then order active tasks by priority and due date."""
-
     status_order = _STATUS_ORDER[task.status]
     if task.status == "completed":
         completed_at = task.completed_at or task.updated_at
@@ -370,26 +288,7 @@ def _task_sort_key(task: TaskItem) -> tuple[int, int, int, float]:
     )
 
 
-@lru_cache
-def get_task_repository() -> SupabaseTaskRepository:
-    settings = get_settings()
-    return SupabaseTaskRepository(
-        supabase_url=settings.supabase_url,
-        api_key=settings.supabase_api_key,
-        tasks_table=settings.supabase_tasks_table,
-        timeout_seconds=settings.supabase_request_timeout_seconds,
-    )
-
-
-@lru_cache
-def get_task_service() -> TaskService:
-    return TaskService(repository=get_task_repository())
-
-
-async def close_task_repository() -> None:
-    get_task_service.cache_clear()
-    if not get_task_repository.cache_info().currsize:
-        return
-    repository = get_task_repository()
-    await repository.close()
-    get_task_repository.cache_clear()
+def get_task_service(
+    session: Annotated[Session, Depends(get_db_session)],
+) -> TaskService:
+    return TaskService(repository=SQLiteTaskRepository(session))
