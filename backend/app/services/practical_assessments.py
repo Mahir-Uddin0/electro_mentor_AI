@@ -5,7 +5,6 @@ import hashlib
 import json
 import shutil
 import tempfile
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -49,9 +48,6 @@ from app.schemas.practical_assessments import (
 from app.services.gemini_fallback import generate_content_with_fallback
 
 QUESTIONNAIRE_VERSION = "work_video_v3"
-SUPPORTED_VIDEO_MIME_TYPES = frozenset(
-    {"video/mp4", "video/mov", "video/quicktime", "video/webm"}
-)
 
 QUESTION_GENERATION_SYSTEM_INSTRUCTION = """
 You are ElectroMentor's evidence-limited electrical practical-work assessor. The
@@ -119,18 +115,6 @@ _DATABASE_VIDEO_ANALYSIS_SAFE_BYTES = 280_000
 
 class PracticalAssessmentConfigurationError(RuntimeError):
     """Required configuration is absent."""
-
-
-class PracticalAssessmentMigrationRequiredError(
-    PracticalAssessmentConfigurationError
-):
-    """The work-video assessment table has not been installed."""
-
-
-class PracticalAssessmentStorageRequiredError(
-    PracticalAssessmentConfigurationError
-):
-    """The private work-video Storage bucket has not been installed."""
 
 
 class PracticalAssessmentProviderError(RuntimeError):
@@ -313,7 +297,7 @@ class GeminiPracticalAssessmentAnalyzer:
         client = self._ensure_client()
         from google.genai import types
 
-        uploaded_file = await self._upload_file(client, video)
+        uploaded_file = await self._upload_video(client, video)
         try:
             config = types.GenerateContentConfig(
                 system_instruction=(
@@ -589,7 +573,6 @@ def _to_practical_assessment(record: PracticalAssessmentRecord) -> PracticalAsse
         grade=record.grade,
         passed=record.passed,
         evaluation=evaluation,
-        personalization_context=record.personalization_context,
         revision=record.revision,
         created_at=_as_utc(record.created_at),
         updated_at=_as_utc(record.updated_at),
@@ -627,8 +610,19 @@ class SQLitePracticalAssessmentRepository:
         video_directory: Path,
     ) -> None:
         self._session = session
-        self._video_directory = video_directory
-        self._video_directory.mkdir(parents=True, exist_ok=True)
+        video_directory.mkdir(parents=True, exist_ok=True)
+        self._video_directory = video_directory.resolve()
+
+    def _video_path(self, object_path: str) -> Path:
+        try:
+            parts = _validate_object_path(object_path)
+            target = self._video_directory.joinpath(*parts).resolve(strict=False)
+            target.relative_to(self._video_directory)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PracticalAssessmentProviderError(
+                "The practical-video object path is invalid"
+            ) from exc
+        return target
 
     def get_for_user(
         self,
@@ -769,8 +763,7 @@ class SQLitePracticalAssessmentRepository:
             video_mime_type=payload["video_mime_type"],
             video_size_bytes=payload["video_size_bytes"],
             video_sha256=payload["video_sha256"],
-            video_object_path=payload.get("video_object_path")
-            or f"{user_id}/{assessment_id}/{payload.get('video_file_name', 'video.mp4')}",
+            video_object_path=payload["video_object_path"],
             questions=_dump_json_field(payload.get("questions")) or "[]",
             video_analysis=_dump_json_field(payload.get("video_analysis")),
             answers=_dump_json_field(payload.get("answers")) or "[]",
@@ -784,7 +777,6 @@ class SQLitePracticalAssessmentRepository:
             grade=payload.get("grade"),
             passed=payload.get("passed"),
             evaluation=_dump_json_field(payload.get("evaluation")),
-            personalization_context=payload.get("personalization_context"),
             revision=1,
             created_at=now,
             updated_at=now,
@@ -885,10 +877,15 @@ class SQLitePracticalAssessmentRepository:
         object_path: str,
         video: ValidatedAssessmentVideo,
     ) -> None:
-        target = self._video_directory / object_path
-        target.parent.mkdir(parents=True, exist_ok=True)
         try:
+            target = self._video_path(object_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Resolve again after creating the parent hierarchy so an existing
+            # symlink cannot redirect the write outside the configured root.
+            target = self._video_path(object_path)
             shutil.copyfile(video.path, target)
+        except PracticalAssessmentProviderError:
+            raise
         except OSError as exc:
             raise PracticalAssessmentProviderError(
                 "Could not save practical assessment video to local storage"
@@ -900,7 +897,7 @@ class SQLitePracticalAssessmentRepository:
         assessment: PracticalAssessment,
         max_bytes: int,
     ) -> ValidatedAssessmentVideo:
-        target = self._video_directory / assessment.video_object_path
+        target = self._video_path(assessment.video_object_path)
         if not target.is_file():
             raise PracticalAssessmentProviderError(
                 "The stored practical video was not found in local storage"
@@ -957,16 +954,18 @@ class SQLitePracticalAssessmentRepository:
         )
 
     def delete_video(self, *, object_path: str) -> None:
-        target = self._video_directory / object_path
-        target.unlink(missing_ok=True)
+        target = self._video_path(object_path)
         try:
-            if target.parent.exists() and not any(target.parent.iterdir()):
-                target.parent.rmdir()
-                if (
-                    target.parent.parent.exists()
-                    and not any(target.parent.parent.iterdir())
-                ):
-                    target.parent.parent.rmdir()
+            target.unlink(missing_ok=True)
+        except OSError as exc:
+            raise PracticalAssessmentProviderError(
+                "Could not delete practical assessment video from local storage"
+            ) from exc
+        try:
+            parent = target.parent
+            while parent != self._video_directory:
+                parent.rmdir()
+                parent = parent.parent
         except OSError:
             pass
 
@@ -976,8 +975,10 @@ class SQLitePracticalAssessmentRepository:
                 assessment_id=previous.id,
                 user_id=previous.user_id,
             )
-        except PracticalAssessmentNotFoundError:
-            raise PracticalAssessmentNotFoundError("Practical assessment not found")
+        except PracticalAssessmentNotFoundError as exc:
+            raise PracticalAssessmentNotFoundError(
+                "Practical assessment not found"
+            ) from exc
         if current.status == "completed":
             raise PracticalAssessmentCompletedError(
                 "The practical assessment is already completed"
@@ -1252,16 +1253,19 @@ class PracticalAssessmentService:
         )
 
 
-def _validate_object_path(object_path: str) -> list[str]:
+def _validate_object_path(object_path: str) -> tuple[str, ...]:
     parts = object_path.split("/")
     if (
         not object_path
+        or len(object_path) > 1_024
+        or "\x00" in object_path
+        or "\\" in object_path
         or object_path.startswith("/")
         or object_path.endswith("/")
         or any(part in {"", ".", ".."} for part in parts)
     ):
         raise ValueError("Invalid practical-video object path")
-    return parts
+    return tuple(parts)
 
 
 def _video_object_path(

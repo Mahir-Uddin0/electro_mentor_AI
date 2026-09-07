@@ -285,8 +285,8 @@ class PracticalAssessment(BaseModel):
     questionnaire_version: str
     status: AssessmentStatus
     video_status: VideoStatus
-    # Required internally for resumable private Storage access. Never serialize
-    # the bucket object key into a browser-facing API response.
+    # Required internally for resumable private local-file access. Never
+    # serialize the server-side relative path into a browser-facing response.
     video_object_path: str = Field(min_length=1, max_length=1_024, exclude=True)
     video_file_name: str = Field(min_length=1, max_length=255)
     video_mime_type: Literal["video/mp4", "video/mov", "video/webm"]
@@ -320,9 +320,11 @@ class PracticalAssessment(BaseModel):
         if (
             value.startswith("/")
             or value.endswith("/")
+            or "\x00" in value
+            or "\\" in value
             or any(part in {"", ".", ".."} for part in parts)
         ):
-            raise ValueError("invalid private video object path")
+            raise ValueError("invalid private video path")
         return value
 
     @field_validator("video_file_name")
@@ -332,6 +334,9 @@ class PracticalAssessment(BaseModel):
 
     @model_validator(mode="after")
     def require_valid_row_state(self) -> Self:
+        expected_video_prefix = f"{self.user_id}/{self.id}/"
+        if not self.video_object_path.startswith(expected_video_prefix):
+            raise ValueError("private video path does not match its assessment owner")
         _validate_question_set(self.questions)
         _require_exact_ids(
             [answer.question_id for answer in self.answers],

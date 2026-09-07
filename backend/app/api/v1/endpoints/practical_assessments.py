@@ -93,7 +93,10 @@ async def list_my_practical_assessment_history(
     except PracticalAssessmentProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Assessment history is temporarily unavailable. Please try again shortly.",
+            detail=(
+                "Assessment history is temporarily unavailable. "
+                "Please try again shortly."
+            ),
         ) from exc
 
 
@@ -287,9 +290,7 @@ def _translate_provider_error(exc: Exception) -> HTTPException:
     if isinstance(exc, PracticalAssessmentConfigurationError):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Practical-assessment storage or Gemini analysis is not configured."
-            ),
+            detail="Gemini practical-assessment analysis is not configured.",
         )
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
