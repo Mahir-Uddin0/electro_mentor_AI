@@ -294,15 +294,15 @@ def test_verifies_backend_issued_access_token() -> None:
     assert user.access_token == token
 
 
-def test_rejects_legacy_supabase_shaped_token() -> None:
+def test_rejects_incomplete_external_identity_token() -> None:
     now = datetime.now(UTC)
-    supabase_token = jwt.encode(
+    external_token = jwt.encode(
         {
-            "aud": "authenticated",
+            "aud": "external-app",
             "email": "learner@example.com",
             "exp": now + timedelta(minutes=10),
             "iat": now,
-            "iss": "https://example-project.supabase.co/auth/v1",
+            "iss": "https://identity.example.test/oauth2",
             "role": "authenticated",
             "sub": str(USER_ID),
         },
@@ -312,7 +312,7 @@ def test_rejects_legacy_supabase_shaped_token() -> None:
 
     with pytest.raises(InvalidAccessTokenError):
         verify_access_token(
-            supabase_token,
+            external_token,
             secret=JWT_SECRET,
             issuer="electromentor-api",
             audience="electromentor-web",
