@@ -5,7 +5,6 @@ import {
   ArrowRight,
   CheckCircle2,
   FileVideo,
-  ShieldCheck,
   Upload,
   X,
 } from "lucide-react";
@@ -323,13 +322,6 @@ export default function UploadAssessmentPage() {
             <span className="button button-secondary">{t("Choose Video")}</span>
           </button>
         )}
-
-        <div className="assessment-privacy-note">
-          <ShieldCheck size={17} />
-          <p>
-            {t("Your video is stored in a private Supabase bucket so you can complete each stage, and is sent to Gemini through the authenticated backend for analysis. It is never exposed through a public video URL.")}
-          </p>
-        </div>
 
         {formError && <div className="auth-message error">{formError}</div>}
         <div className="wizard-actions assessment-first-actions">
