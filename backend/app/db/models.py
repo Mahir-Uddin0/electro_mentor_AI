@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -221,7 +222,8 @@ event.listen(
         BEFORE UPDATE ON conversations
         FOR EACH ROW
         BEGIN
-            UPDATE conversations SET updated_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%f', 'now')
+            UPDATE conversations
+            SET updated_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%f', 'now')
             WHERE rowid = NEW.rowid;
         END
         """
@@ -232,6 +234,12 @@ event.listen(
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["conversation_id", "user_id"],
+            ["conversations.id", "conversations.user_id"],
+            name="chat_messages_conversation_owner_fkey",
+            ondelete="CASCADE",
+        ),
         CheckConstraint(
             "role IN ('user', 'assistant')",
             name="chat_messages_role_check",
@@ -257,7 +265,6 @@ class ChatMessage(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
     )
     user_id: Mapped[str] = mapped_column(
@@ -275,38 +282,43 @@ class ChatMessage(Base):
 
 
 # Auto-assign sequence_no per conversation and touch parent updated_at.
+CHAT_MESSAGES_AUTO_SEQUENCE_TRIGGER_SQL = """
+CREATE TRIGGER chat_messages_auto_sequence
+AFTER INSERT ON chat_messages
+FOR EACH ROW
+BEGIN
+    UPDATE chat_messages
+    SET sequence_no = (
+        SELECT COALESCE(MAX(m.sequence_no), 0) + 1
+        FROM chat_messages m
+        WHERE m.conversation_id = NEW.conversation_id
+          AND m.id != NEW.id
+    )
+    WHERE id = NEW.id;
+
+    UPDATE conversations
+    SET updated_at = NEW.created_at
+    WHERE id = NEW.conversation_id
+      AND user_id = NEW.user_id
+      AND updated_at < NEW.created_at;
+END
+"""
+
+
 event.listen(
     ChatMessage.__table__,
     "after_create",
-    DDL(
-        """
-        CREATE TRIGGER chat_messages_auto_sequence
-        AFTER INSERT ON chat_messages
-        FOR EACH ROW
-        BEGIN
-            UPDATE chat_messages
-            SET sequence_no = (
-                SELECT COALESCE(MAX(m.sequence_no), 0) + 1
-                FROM chat_messages m
-                WHERE m.conversation_id = NEW.conversation_id
-                  AND m.id != NEW.id
-            )
-            WHERE id = NEW.id;
-
-            UPDATE conversations
-            SET updated_at = NEW.created_at
-            WHERE id = NEW.conversation_id
-              AND user_id = NEW.user_id
-              AND updated_at < NEW.created_at;
-        END
-        """
-    ).execute_if(dialect="sqlite"),
+    DDL(CHAT_MESSAGES_AUTO_SEQUENCE_TRIGGER_SQL).execute_if(dialect="sqlite"),
 )
 
 
 class PracticalAssessmentRecord(Base):
     __tablename__ = "practical_assessments"
     __table_args__ = (
+        CheckConstraint(
+            "questionnaire_version = 'work_video_v3'",
+            name="practical_assessments_questionnaire_version_check",
+        ),
         CheckConstraint(
             "status IN ('draft', 'completed')",
             name="practical_assessments_status_check",
@@ -320,12 +332,110 @@ class PracticalAssessmentRecord(Base):
             name="practical_assessments_grade_check",
         ),
         CheckConstraint(
+            "length(trim(video_file_name)) BETWEEN 1 AND 255",
+            name="practical_assessments_video_file_name_check",
+        ),
+        CheckConstraint(
+            "video_mime_type IN ('video/mp4', 'video/mov', 'video/webm')",
+            name="practical_assessments_video_mime_type_check",
+        ),
+        CheckConstraint(
+            "video_size_bytes BETWEEN 1 AND 100000000",
+            name="practical_assessments_video_size_bytes_check",
+        ),
+        CheckConstraint(
+            "length(video_sha256) = 64 "
+            "AND video_sha256 NOT GLOB '*[^0-9a-f]*'",
+            name="practical_assessments_video_sha256_check",
+        ),
+        CheckConstraint(
+            "length(video_object_path) BETWEEN 1 AND 1024 "
+            "AND video_object_path LIKE user_id || '/' || id || '/%' "
+            "AND video_object_path NOT LIKE '/%' "
+            "AND video_object_path NOT LIKE '%/' "
+            "AND video_object_path NOT LIKE '%//%' "
+            "AND video_object_path NOT LIKE '%/./%' "
+            "AND video_object_path NOT LIKE '%/../%' "
+            "AND instr(video_object_path, '\\') = 0",
+            name="practical_assessments_video_object_path_check",
+        ),
+        CheckConstraint(
+            "json_valid(questions) "
+            "AND json_type(questions) = 'array' "
+            "AND json_array_length(questions) = 10",
+            name="practical_assessments_questions_check",
+        ),
+        CheckConstraint(
+            "json_valid(answers) "
+            "AND json_type(answers) = 'array' "
+            "AND json_array_length(answers) = 10",
+            name="practical_assessments_answers_check",
+        ),
+        CheckConstraint(
+            "video_analysis IS NULL OR "
+            "(json_valid(video_analysis) AND json_type(video_analysis) = 'object')",
+            name="practical_assessments_video_analysis_check",
+        ),
+        CheckConstraint(
+            "(video_status = 'questions_generated' AND video_analysis IS NULL) OR "
+            "(video_status = 'answers_generated' AND video_analysis IS NOT NULL)",
+            name="practical_assessments_video_state_check",
+        ),
+        CheckConstraint(
+            "safety_procedures_score IS NULL OR "
+            "safety_procedures_score BETWEEN 0 AND 100",
+            name="practical_assessments_safety_procedures_score_check",
+        ),
+        CheckConstraint(
+            "tool_usage_score IS NULL OR tool_usage_score BETWEEN 0 AND 100",
+            name="practical_assessments_tool_usage_score_check",
+        ),
+        CheckConstraint(
+            "technical_knowledge_score IS NULL OR "
+            "technical_knowledge_score BETWEEN 0 AND 100",
+            name="practical_assessments_technical_knowledge_score_check",
+        ),
+        CheckConstraint(
+            "work_quality_score IS NULL OR work_quality_score BETWEEN 0 AND 100",
+            name="practical_assessments_work_quality_score_check",
+        ),
+        CheckConstraint(
+            "testing_verification_score IS NULL OR "
+            "testing_verification_score BETWEEN 0 AND 100",
+            name="practical_assessments_testing_verification_score_check",
+        ),
+        CheckConstraint(
+            "documentation_score IS NULL OR documentation_score BETWEEN 0 AND 100",
+            name="practical_assessments_documentation_score_check",
+        ),
+        CheckConstraint(
+            "overall_score IS NULL OR overall_score BETWEEN 0 AND 100",
+            name="practical_assessments_overall_score_check",
+        ),
+        CheckConstraint(
+            "evaluation IS NULL OR "
+            "(json_valid(evaluation) AND json_type(evaluation) = 'object')",
+            name="practical_assessments_evaluation_check",
+        ),
+        CheckConstraint(
             "revision >= 1",
             name="practical_assessments_revision_check",
         ),
         CheckConstraint(
-            "(status = 'draft' AND completed_at IS NULL) OR "
-            "(status = 'completed' AND completed_at IS NOT NULL)",
+            "(status = 'draft' AND completed_at IS NULL) OR ("
+            "status = 'completed' "
+            "AND video_status = 'answers_generated' "
+            "AND safety_procedures_score IS NOT NULL "
+            "AND tool_usage_score IS NOT NULL "
+            "AND technical_knowledge_score IS NOT NULL "
+            "AND work_quality_score IS NOT NULL "
+            "AND testing_verification_score IS NOT NULL "
+            "AND documentation_score IS NOT NULL "
+            "AND overall_score IS NOT NULL "
+            "AND grade IS NOT NULL "
+            "AND passed IS NOT NULL "
+            "AND evaluation IS NOT NULL "
+            "AND completed_at IS NOT NULL)",
             name="practical_assessments_completion_check",
         ),
         Index(
@@ -383,7 +493,6 @@ class PracticalAssessmentRecord(Base):
     grade: Mapped[str | None] = mapped_column(String(5))
     passed: Mapped[bool | None] = mapped_column(Boolean)
     evaluation: Mapped[str | None] = mapped_column(Text)
-    personalization_context: Mapped[str | None] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -392,3 +501,39 @@ class PracticalAssessmentRecord(Base):
     user: Mapped[User] = relationship(back_populates="practical_assessments")
 
 
+event.listen(
+    PracticalAssessmentRecord.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE TRIGGER practical_assessments_completed_immutable
+        BEFORE UPDATE ON practical_assessments
+        FOR EACH ROW
+        WHEN OLD.status = 'completed'
+        BEGIN
+            SELECT RAISE(ABORT, 'completed practical assessment is immutable');
+        END
+        """
+    ).execute_if(dialect="sqlite"),
+)
+
+
+event.listen(
+    PracticalAssessmentRecord.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE TRIGGER practical_assessments_identity_immutable
+        BEFORE UPDATE OF id, user_id, questionnaire_version, created_at
+        ON practical_assessments
+        FOR EACH ROW
+        WHEN NEW.id <> OLD.id
+          OR NEW.user_id <> OLD.user_id
+          OR NEW.questionnaire_version <> OLD.questionnaire_version
+          OR NEW.created_at <> OLD.created_at
+        BEGIN
+            SELECT RAISE(ABORT, 'practical assessment identity is immutable');
+        END
+        """
+    ).execute_if(dialect="sqlite"),
+)
