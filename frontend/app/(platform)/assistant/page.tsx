@@ -25,6 +25,7 @@ import {
 } from "react";
 
 import { Button, Card } from "@/components/ui";
+import { Markdown, cleanMarkdownPreview } from "@/components/markdown";
 import { useLanguage } from "@/components/language-provider";
 import {
   ApiError,
@@ -350,7 +351,7 @@ export default function AssistantPage() {
                   <>
                     <button className="conversation-open" onClick={() => void openConversation(conversation.id)}>
                       <strong>{conversation.title}</strong>
-                      <span>{conversation.last_message === undefined ? t("Open conversation") : conversation.last_message || t("No messages yet")}</span>
+                      <span>{conversation.last_message === undefined ? t("Open conversation") : cleanMarkdownPreview(conversation.last_message || "") || t("No messages yet")}</span>
                     </button>
                     <div className="conversation-actions">
                       <button onClick={(event) => beginRename(event, conversation)} aria-label={`${t("Edit")} ${conversation.title}`}><Pencil size={13} /></button>
@@ -389,7 +390,7 @@ export default function AssistantPage() {
             <div className={`message ${message.role}`} key={message.id}>
               <span className="message-avatar">{message.role === "assistant" ? <Bot size={16} /> : <UserRound size={16} />}</span>
               <div className="message-bubble">
-                <p>{message.content}</p>
+                <Markdown content={message.content} />
                 {!!message.sources?.length && (
                   <div className="source-list">
                     {message.sources.map((source, index) => (
