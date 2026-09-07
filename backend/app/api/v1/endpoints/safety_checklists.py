@@ -7,7 +7,17 @@ from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user
 from app.core.security import AuthenticatedUser
-from app.schemas.safety_checklists import SafetyChecklistListResponse
+from app.schemas.safety_checklists import (
+    SafetyChecklistGenerationRequest,
+    SafetyChecklistGenerationResponse,
+    SafetyChecklistListResponse,
+)
+from app.services.safety_checklist_generation import (
+    SafetyChecklistConfigurationError,
+    SafetyChecklistGenerationService,
+    SafetyChecklistProviderError,
+    get_safety_checklist_generation_service,
+)
 from app.services.safety_checklists import (
     SafetyChecklistCatalog,
     SafetyChecklistNotFoundError,
@@ -21,6 +31,10 @@ CatalogDependency = Annotated[
     SafetyChecklistCatalog,
     Depends(get_safety_checklist_catalog),
 ]
+GenerationServiceDependency = Annotated[
+    SafetyChecklistGenerationService,
+    Depends(get_safety_checklist_generation_service),
+]
 
 
 @router.get("", response_model=SafetyChecklistListResponse)
@@ -29,6 +43,30 @@ def list_safety_checklists(
     catalog: CatalogDependency,
 ) -> SafetyChecklistListResponse:
     return SafetyChecklistListResponse(documents=catalog.list_documents())
+
+
+@router.post(
+    "/generate",
+    response_model=SafetyChecklistGenerationResponse,
+    summary="Generate a task-aware electrical safety checklist with Gemini",
+)
+async def generate_safety_checklist(
+    request: SafetyChecklistGenerationRequest,
+    _user: CurrentUser,
+    service: GenerationServiceDependency,
+) -> SafetyChecklistGenerationResponse:
+    try:
+        return await service.generate(request.task)
+    except SafetyChecklistConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini safety-checklist generation is not configured.",
+        ) from exc
+    except SafetyChecklistProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The safety-checklist provider is temporarily unavailable.",
+        ) from exc
 
 
 @router.get(
