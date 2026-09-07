@@ -32,8 +32,6 @@ class Settings(BaseSettings):
     auth_access_token_minutes: int = Field(default=15, ge=1, le=1_440)
     auth_refresh_token_days: int = Field(default=14, ge=1, le=90)
 
-
-
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
 
     gemini_api_key: str | None = None
@@ -45,6 +43,12 @@ class Settings(BaseSettings):
     )
     gemini_generation_max_output_tokens: int = Field(default=2_048, ge=1, le=65_536)
     gemini_generation_max_retries: int = Field(default=3, ge=1, le=6)
+    gemini_checklist_model: str = "gemini-3.7-flash"
+    gemini_checklist_max_output_tokens: int = Field(
+        default=4_096,
+        ge=1,
+        le=65_536,
+    )
     gemini_vision_model: str = "gemini-3.7-flash"
     gemini_vision_max_output_tokens: int = Field(
         default=4_096, ge=1, le=65_536
@@ -101,7 +105,9 @@ class Settings(BaseSettings):
     chunks_directory: Path = Path("data/chunks")
     safety_checklist_directory: Path = Path("data/safety_checklist")
     guide_library_directory: Path = Path("data/wiring_circuit_guide_library")
-    practical_assessment_video_directory: Path = Path("data/practical_assessment_videos")
+    practical_assessment_video_directory: Path = Path(
+        "data/practical_assessment_videos"
+    )
 
     semantic_breakpoint_percentile: float = Field(default=80.0, ge=0, le=100)
     semantic_candidate_chars: int = Field(default=350, gt=0)

@@ -12,6 +12,9 @@ from app.db.session import initialize_database
 from app.services.llm import close_llm_client
 from app.services.photo_analysis import close_photo_analysis_service
 from app.services.practical_assessments import close_practical_assessment_service
+from app.services.safety_checklist_generation import (
+    close_safety_checklist_generation_service,
+)
 
 
 @asynccontextmanager
@@ -21,6 +24,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await close_llm_client()
     await close_photo_analysis_service()
     await close_practical_assessment_service()
+    await close_safety_checklist_generation_service()
 
 
 def create_app() -> FastAPI:
