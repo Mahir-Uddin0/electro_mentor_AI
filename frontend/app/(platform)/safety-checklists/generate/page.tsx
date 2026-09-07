@@ -1,38 +1,49 @@
 "use client";
 
 import {
-  CheckCircle2,
   ClipboardList,
   RotateCcw,
   Sparkles,
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
-import { Badge, Button, Card, LinkButton, PageHeading, ProgressBar } from "@/components/ui";
+import { Badge, Button, Card, PageHeading, ProgressBar } from "@/components/ui";
 import { useLanguage } from "@/components/language-provider";
-import { frontendApi } from "@/lib/api/client";
+import {
+  frontendApi,
+  type GeneratedChecklistPriority,
+  type GeneratedSafetyChecklist,
+} from "@/lib/api/client";
 
-const generatedItems = [
-  "Disconnect and lock out the main power supply before starting.",
-  "Verify zero voltage at every conductor with an approved tester.",
-  "Inspect tools, leads, insulation, and protective equipment for damage.",
-  "Confirm cable sizes and protective devices match the intended load.",
-  "Keep the work area dry, well lit, and clear of obstructions.",
-  "Use insulated gloves, safety shoes, and eye protection.",
-  "Check earth continuity before energizing the installation.",
-  "Label circuits and record the final test results.",
-];
+const priorityLabels: Record<GeneratedChecklistPriority, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
 
-type GeneratedChecklist = { id: string; title: string };
+const priorityTones: Record<
+  GeneratedChecklistPriority,
+  "red" | "amber" | "blue" | "gray"
+> = {
+  critical: "red",
+  high: "amber",
+  medium: "blue",
+  low: "gray",
+};
 
 export default function GenerateSafetyChecklistPage() {
   const { locale, t } = useLanguage();
   const [task, setTask] = useState("");
-  const [generated, setGenerated] = useState<GeneratedChecklist | null>(null);
-  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [generated, setGenerated] = useState<GeneratedSafetyChecklist | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const progress = useMemo(() => Math.round((checked.size / generatedItems.length) * 100), [checked]);
+  const itemCount = useMemo(
+    () => generated?.sections.reduce((total, section) => total + section.items.length, 0) ?? 0,
+    [generated],
+  );
+  const progress = itemCount ? Math.round((checked.size / itemCount) * 100) : 0;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,6 +56,12 @@ export default function GenerateSafetyChecklistPage() {
     setError("");
     try {
       const result = await frontendApi.generateChecklist(normalizedTask);
+      if (result.outcome === "invalid_prompt") {
+        setGenerated(null);
+        setChecked(new Set());
+        setError(result.message);
+        return;
+      }
       setGenerated(result);
       setChecked(new Set());
     } catch (requestError) {
@@ -54,11 +71,11 @@ export default function GenerateSafetyChecklistPage() {
     }
   }
 
-  function toggle(index: number) {
+  function toggle(itemKey: string) {
     setChecked((current) => {
       const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
+      if (next.has(itemKey)) next.delete(itemKey);
+      else next.add(itemKey);
       return next;
     });
   }
@@ -77,6 +94,8 @@ export default function GenerateSafetyChecklistPage() {
             onChange={(event) => setTask(event.target.value)}
             placeholder={t("e.g., Install a distribution board with 4 circuits for a house")}
             aria-label={t("Describe the electrical task")}
+            maxLength={2000}
+            disabled={loading}
           />
           <div className="generator-actions">
             <Button type="submit" icon={Sparkles} disabled={loading || !task.trim()}>
@@ -101,25 +120,58 @@ export default function GenerateSafetyChecklistPage() {
             <div className="checklist-items">
               <div className="result-title">
                 <div>
-                  <Badge tone="purple">{t("AI generated")} · {generated.id}</Badge>
-                  <h2 style={{ margin: "10px 0 3px", fontSize: 17 }}>{t(generated.title)}</h2>
-                  <p style={{ margin: 0, color: "var(--muted)", fontSize: 11 }}>{t("Review each item with your instructor before starting work.")}</p>
+                  <Badge tone="purple">
+                    {t("AI generated")} · {generated.generation_id.slice(0, 8).toUpperCase()}
+                  </Badge>
+                  <h2 style={{ margin: "10px 0 3px", fontSize: 17 }}>{generated.title}</h2>
+                  <p style={{ margin: 0, color: "var(--muted)", fontSize: 11 }}>
+                    {generated.task_summary}
+                  </p>
                 </div>
-                <Button variant="ghost" icon={RotateCcw} onClick={() => setGenerated(null)}>{t("Start Over")}</Button>
+                <Button
+                  variant="ghost"
+                  icon={RotateCcw}
+                  onClick={() => {
+                    setGenerated(null);
+                    setChecked(new Set());
+                    setError("");
+                  }}
+                >
+                  {t("Start Over")}
+                </Button>
               </div>
+              <div className="checklist-guidance">{generated.message}</div>
               <div style={{ display: "grid", gap: 7, margin: "8px 0" }}>
-                <span style={{ color: "var(--muted)", fontSize: 11 }}>{new Intl.NumberFormat(locale).format(checked.size)} / {new Intl.NumberFormat(locale).format(generatedItems.length)} {t("completed")}</span>
+                <span style={{ color: "var(--muted)", fontSize: 11 }}>{new Intl.NumberFormat(locale).format(checked.size)} / {new Intl.NumberFormat(locale).format(itemCount)} {t("completed")}</span>
                 <ProgressBar value={progress} tone={progress === 100 ? "green" : "blue"} />
               </div>
-              {generatedItems.map((item, index) => (
-                <label key={item} className={`check-row ${checked.has(index) ? "checked" : ""}`}>
-                  <input type="checkbox" checked={checked.has(index)} onChange={() => toggle(index)} />
-                  <span>{t(item)}</span>
-                </label>
+              {generated.sections.map((section, sectionIndex) => (
+                <section className="generated-checklist-section" key={`${section.title}-${sectionIndex}`}>
+                  <h3>{section.title}</h3>
+                  {section.items.map((item, itemIndex) => {
+                    const itemKey = `${sectionIndex}-${itemIndex}`;
+                    return (
+                      <label
+                        key={itemKey}
+                        className={`check-row ${checked.has(itemKey) ? "checked" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked.has(itemKey)}
+                          onChange={() => toggle(itemKey)}
+                        />
+                        <span className="generated-checklist-copy">
+                          <span className="generated-checklist-action">{item.action}</span>
+                          <span className="generated-checklist-reason">{item.reason}</span>
+                        </span>
+                        <Badge tone={priorityTones[item.priority]}>
+                          {t(priorityLabels[item.priority])}
+                        </Badge>
+                      </label>
+                    );
+                  })}
+                </section>
               ))}
-              <div className="inline-actions" style={{ justifyContent: "flex-start", marginTop: 5 }}>
-                <LinkButton href="/safety-checklists/house-wiring" variant="secondary" icon={CheckCircle2}>{t("Open Full Checklist")}</LinkButton>
-              </div>
             </div>
           </Card>
         )}

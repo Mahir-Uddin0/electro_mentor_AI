@@ -123,6 +123,47 @@ export type PdfLibraryDocument = {
 export type SafetyChecklistDocument = PdfLibraryDocument;
 export type GuideDocument = PdfLibraryDocument;
 
+export type GeneratedChecklistPriority =
+  | "critical"
+  | "high"
+  | "medium"
+  | "low";
+
+export type GeneratedChecklistItem = {
+  action: string;
+  reason: string;
+  priority: GeneratedChecklistPriority;
+};
+
+export type GeneratedChecklistSection = {
+  title: string;
+  items: GeneratedChecklistItem[];
+};
+
+type ChecklistGenerationMetadata = {
+  generation_id: string;
+  generated_at: string;
+  message: string;
+};
+
+export type GeneratedSafetyChecklist = ChecklistGenerationMetadata & {
+  outcome: "checklist";
+  title: string;
+  task_summary: string;
+  sections: GeneratedChecklistSection[];
+};
+
+export type InvalidChecklistPrompt = ChecklistGenerationMetadata & {
+  outcome: "invalid_prompt";
+  title: null;
+  task_summary: null;
+  sections: [];
+};
+
+export type SafetyChecklistGenerationResponse =
+  | GeneratedSafetyChecklist
+  | InvalidChecklistPrompt;
+
 export type TaskStatus = "upcoming" | "in_progress" | "completed";
 export type TaskPriority = "high" | "medium" | "low";
 
@@ -442,10 +483,14 @@ export const frontendApi = {
     }, { useMock: useMockPhotoApi });
   },
   generateChecklist: (task: string) =>
-    apiRequest<{ id: string; title: string }>("checklists/generate", {
-      method: "POST",
-      body: JSON.stringify({ task }),
-    }),
+    apiRequest<SafetyChecklistGenerationResponse>(
+      "safety-checklists/generate",
+      {
+        method: "POST",
+        body: JSON.stringify({ task }),
+      },
+      { useMock: useMockChecklistApi },
+    ),
   listSafetyChecklists: () =>
     apiRequest<{ documents: SafetyChecklistDocument[] }>(
       "safety-checklists",

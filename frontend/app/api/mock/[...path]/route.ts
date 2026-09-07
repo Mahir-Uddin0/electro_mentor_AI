@@ -302,13 +302,86 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     });
   }
 
-  if (path === "checklists/generate") {
+  if (path === "safety-checklists/generate") {
+    const task = typeof body.task === "string" ? body.task.trim() : "";
+    if (task.length < 4) {
+      return NextResponse.json({
+        generation_id: crypto.randomUUID(),
+        generated_at: new Date().toISOString(),
+        outcome: "invalid_prompt",
+        message: mockText(
+          bangla,
+          "Please describe a specific electrical task, for example: Replace a damaged wall socket.",
+          "একটি নির্দিষ্ট বৈদ্যুতিক কাজের বিবরণ দিন, যেমন: নষ্ট দেয়াল সকেট বদলানো।",
+        ),
+        title: null,
+        task_summary: null,
+        sections: [],
+      });
+    }
     return NextResponse.json({
-      id: "CHK-204",
-      title:
-        typeof body.task === "string"
-          ? body.task
-          : mockText(bangla, "Safety checklist", "নিরাপত্তা চেকলিস্ট"),
+      generation_id: crypto.randomUUID(),
+      generated_at: new Date().toISOString(),
+      outcome: "checklist",
+      message: mockText(
+        bangla,
+        "Review this checklist with a qualified supervisor and follow site rules and local requirements.",
+        "যোগ্য তত্ত্বাবধায়কের সঙ্গে এই চেকলিস্ট পর্যালোচনা করুন এবং সাইটের নিয়ম ও স্থানীয় প্রয়োজনীয়তা মেনে চলুন।",
+      ),
+      title: mockText(bangla, `${task} safety checklist`, `${task} নিরাপত্তা চেকলিস্ট`),
+      task_summary: task,
+      sections: [
+        {
+          title: mockText(bangla, "Before work", "কাজের আগে"),
+          items: [
+            {
+              action: mockText(bangla, "Identify every energy source and isolation point.", "সব শক্তির উৎস ও আইসোলেশন পয়েন্ট চিহ্নিত করুন।"),
+              reason: mockText(bangla, "This prevents an unexpected supply from remaining connected.", "এতে অপ্রত্যাশিত কোনো সরবরাহ সংযুক্ত থাকে না।"),
+              priority: "critical",
+            },
+            {
+              action: mockText(bangla, "Isolate, lock out, and tag the electrical supply.", "বিদ্যুৎ সরবরাহ আইসোলেট, লকআউট ও ট্যাগআউট করুন।"),
+              reason: mockText(bangla, "This prevents accidental re-energization.", "এতে দুর্ঘটনাবশত পুনরায় বিদ্যুৎ চালু হওয়া রোধ হয়।"),
+              priority: "critical",
+            },
+            {
+              action: mockText(bangla, "Verify absence of voltage with a correctly rated tester.", "সঠিক রেটিংয়ের টেস্টার দিয়ে ভোল্টেজ নেই তা যাচাই করুন।"),
+              reason: mockText(bangla, "Isolation must be proved before touching conductors.", "কন্ডাক্টর স্পর্শ করার আগে আইসোলেশন নিশ্চিত করতে হবে।"),
+              priority: "critical",
+            },
+            {
+              action: mockText(bangla, "Inspect PPE, insulated tools, and test leads for damage.", "পিপিই, ইনসুলেটেড টুল ও টেস্ট লিডে ক্ষতি আছে কি না দেখুন।"),
+              reason: mockText(bangla, "Damaged safety equipment cannot provide reliable protection.", "ক্ষতিগ্রস্ত নিরাপত্তা সরঞ্জাম নির্ভরযোগ্য সুরক্ষা দেয় না।"),
+              priority: "high",
+            },
+          ],
+        },
+        {
+          title: mockText(bangla, "Inspection and completion", "পরিদর্শন ও সমাপ্তি"),
+          items: [
+            {
+              action: mockText(bangla, "Confirm conductors and protective devices suit the task.", "কন্ডাক্টর ও সুরক্ষা ডিভাইস কাজটির উপযোগী কি না নিশ্চিত করুন।"),
+              reason: mockText(bangla, "Incorrect selection can cause overheating or failed protection.", "ভুল নির্বাচন অতিরিক্ত তাপ বা সুরক্ষা ব্যর্থতার কারণ হতে পারে।"),
+              priority: "high",
+            },
+            {
+              action: mockText(bangla, "Check terminations, earthing, covers, and cable support.", "টার্মিনেশন, আর্থিং, কভার ও কেবল সাপোর্ট পরীক্ষা করুন।"),
+              reason: mockText(bangla, "Secure mechanical and protective parts reduce fault risk.", "সুরক্ষিত যান্ত্রিক ও প্রতিরক্ষামূলক অংশ ত্রুটির ঝুঁকি কমায়।"),
+              priority: "high",
+            },
+            {
+              action: mockText(bangla, "Complete the required dead tests before energization.", "বিদ্যুৎ চালুর আগে প্রয়োজনীয় ডেড টেস্ট সম্পন্ন করুন।"),
+              reason: mockText(bangla, "Testing can identify wiring errors before they become hazardous.", "পরীক্ষা বিপজ্জনক হওয়ার আগেই ওয়্যারিং ত্রুটি শনাক্ত করতে পারে।"),
+              priority: "high",
+            },
+            {
+              action: mockText(bangla, "Replace covers, label the circuit, and record test results.", "কভার লাগান, সার্কিটে লেবেল দিন এবং পরীক্ষার ফল লিখে রাখুন।"),
+              reason: mockText(bangla, "Documentation supports safe operation and future maintenance.", "নথিপত্র নিরাপদ পরিচালনা ও ভবিষ্যৎ রক্ষণাবেক্ষণে সহায়তা করে।"),
+              priority: "medium",
+            },
+          ],
+        },
+      ],
     });
   }
   return NextResponse.json({ ok: true, path, received: body });
