@@ -6,12 +6,16 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, inspect, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
 from app.core.language import reset_response_language, set_response_language
+from app.db.base import Base
+from app.db.models import PracticalAssessmentRecord, User
 from app.main import app
 from app.schemas.practical_assessments import (
     COMPETENCY_IDS,
@@ -23,8 +27,10 @@ from app.schemas.practical_assessments import (
     AssessmentQuestionDefinition,
     GeminiAssessmentResults,
     GeminiAssessmentSuggestions,
+    GeminiGeneratedQuestion,
     GeminiImprovementSuggestion,
     GeminiQuestionFeedback,
+    GeminiQuestionGeneration,
     GeminiSkillScore,
     ImprovementSuggestion,
     PracticalAssessment,
@@ -35,8 +41,6 @@ from app.schemas.practical_assessments import (
     VideoAnswerSuggestion,
     VideoInference,
 )
-from sqlalchemy.orm import Session
-
 from app.services.practical_assessments import (
     AssessmentVideoTooLargeError,
     GeminiPracticalAssessmentAnalyzer,
@@ -59,10 +63,6 @@ NOW = datetime(2026, 8, 25, 10, 0, tzinfo=UTC)
 
 @pytest.fixture()
 def db_session():
-    from app.db.base import Base
-    from app.db.models import User
-    from sqlalchemy import create_engine, event
-
     engine = create_engine("sqlite:///:memory:")
 
     @event.listens_for(engine, "connect")
@@ -230,6 +230,10 @@ def _row(**overrides: Any) -> PracticalAssessment:
         "completed_at": None,
     }
     values.update(overrides)
+    if "video_object_path" not in overrides:
+        values["video_object_path"] = (
+            f"{values['user_id']}/{values['id']}/work-video.mp4"
+        )
     return PracticalAssessment.model_validate(values)
 
 
@@ -237,7 +241,7 @@ def _row_json(**overrides: Any) -> dict[str, Any]:
     row = _row(**overrides)
     payload = row.model_dump(mode="json")
     # The private object key is intentionally excluded from browser-facing
-    # serialization, but Supabase includes it in repository query results.
+    # serialization, but repository fixtures need it for private-file lookup.
     payload["video_object_path"] = row.video_object_path
     return payload
 
@@ -386,6 +390,169 @@ def test_video_rejects_oversized_and_mismatched_uploads() -> None:
                 max_bytes=1_000,
             )
         )
+
+
+def test_question_generation_uploads_video_and_deletes_remote_file(
+    tmp_path: Path,
+) -> None:
+    analyzer = object.__new__(GeminiPracticalAssessmentAnalyzer)
+    analyzer._api_key = "test-key"
+    analyzer._model = "test-model"
+    analyzer._fallback_models = ""
+    analyzer._max_output_tokens = 1_000
+    analyzer._max_retries = 1
+    analyzer._file_timeout = 1
+    analyzer._client = SimpleNamespace()
+    remote_file = SimpleNamespace(name="files/work-video")
+    uploaded: list[Path] = []
+    deleted: list[str] = []
+
+    async def upload_video(_: object, video: ValidatedAssessmentVideo) -> object:
+        uploaded.append(video.path)
+        return remote_file
+
+    async def delete_video(_: object, remote: object) -> None:
+        deleted.append(remote.name)
+
+    async def generate(_: object, contents: object, __: object) -> object:
+        assert contents[0] is remote_file
+        return SimpleNamespace(
+            parsed=GeminiQuestionGeneration(
+                questions=[
+                    GeminiGeneratedQuestion(
+                        question_number=number,
+                        prompt=question.prompt,
+                        competency=question.competency,
+                    )
+                    for number, question in enumerate(_questions(), start=1)
+                ]
+            )
+        )
+
+    analyzer._upload_video = upload_video
+    analyzer._delete_remote_file = delete_video
+    analyzer._generate_with_retry = generate
+    video = _validated_video(tmp_path)
+    try:
+        questions = asyncio.run(analyzer.generate_questions(video))
+    finally:
+        video.cleanup()
+
+    assert len(questions) == 10
+    assert uploaded
+    assert deleted == ["files/work-video"]
+
+
+def test_practical_assessment_schema_contains_sqlite_integrity_guards(
+    db_session: Session,
+) -> None:
+    inspector = inspect(db_session.get_bind())
+    constraints = {
+        item["name"]
+        for item in inspector.get_check_constraints("practical_assessments")
+    }
+
+    assert {
+        "practical_assessments_questionnaire_version_check",
+        "practical_assessments_video_file_name_check",
+        "practical_assessments_video_mime_type_check",
+        "practical_assessments_video_size_bytes_check",
+        "practical_assessments_video_sha256_check",
+        "practical_assessments_video_object_path_check",
+        "practical_assessments_questions_check",
+        "practical_assessments_answers_check",
+        "practical_assessments_video_analysis_check",
+        "practical_assessments_video_state_check",
+        "practical_assessments_overall_score_check",
+        "practical_assessments_evaluation_check",
+        "practical_assessments_completion_check",
+    } <= constraints
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"questionnaire_version": "legacy"},
+        {"video_file_name": "   "},
+        {"video_mime_type": "text/plain"},
+        {"video_size_bytes": 0},
+        {"video_sha256": "not-a-sha256"},
+        {"video_object_path": "../outside.mp4"},
+        {"questions": "not-json"},
+        {"answers": "[]"},
+        {"video_status": "answers_generated", "video_analysis": None},
+        {"overall_score": 101},
+        {"evaluation": "not-json"},
+    ],
+)
+def test_database_rejects_invalid_practical_assessment_values(
+    changes: dict[str, object],
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row()
+    repository.create_draft(
+        assessment_id=row.id,
+        user_id=row.user_id,
+        payload=_row_json(),
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            update(PracticalAssessmentRecord)
+            .where(PracticalAssessmentRecord.id == str(row.id))
+            .values(**changes)
+        )
+        db_session.commit()
+    db_session.rollback()
+
+
+def test_completed_practical_assessment_is_immutable_in_database(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    row = _row()
+    draft = repository.create_draft(
+        assessment_id=row.id,
+        user_id=row.user_id,
+        payload=_row_json(),
+    )
+    repository.complete(assessment=draft, updates=_completed_overrides())
+
+    with pytest.raises(IntegrityError, match="completed practical assessment"):
+        db_session.execute(
+            update(PracticalAssessmentRecord)
+            .where(PracticalAssessmentRecord.id == str(row.id))
+            .values(overall_score=99)
+        )
+        db_session.commit()
+    db_session.rollback()
+
+
+def test_local_video_storage_rejects_paths_outside_configured_root(
+    tmp_path: Path,
+    db_session: Session,
+) -> None:
+    source = _validated_video(tmp_path)
+    repository = SQLitePracticalAssessmentRepository(
+        session=db_session,
+        video_directory=tmp_path / "videos",
+    )
+    try:
+        with pytest.raises(PracticalAssessmentProviderError, match="path is invalid"):
+            repository.upload_video(object_path="../outside.mp4", video=source)
+    finally:
+        source.cleanup()
+
+    assert not (tmp_path / "outside.mp4").exists()
 
 
 def test_repository_reads_and_writes_with_sqlite(
