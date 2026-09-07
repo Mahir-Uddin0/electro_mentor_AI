@@ -20,7 +20,8 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. Mock API mode is enabled by default, so the UI works before Supabase and the remaining FastAPI endpoints are configured.
+Open `http://localhost:3000`. Mock API mode is enabled by default, so the UI
+works before the remaining FastAPI endpoints are configured.
 
 ## RAG backend
 
@@ -106,7 +107,7 @@ Authorization: Bearer <backend-access-token>
 The authenticated task API now stores task data in the same local SQLite
 database as authentication. FastAPI creates the `tasks` table, constraints,
 ownership index, foreign key, and status-transition trigger at startup; no
-separate SQL migration command or Supabase task configuration is required.
+separate schema migration command or external task configuration is required.
 
 Every task query combines the requested task ID with the authenticated user's
 ID from the backend JWT. As a result, users can list and mutate only their own
@@ -127,37 +128,20 @@ Task status advances from `upcoming` to `in_progress` to `completed`. The
 service validates transitions and the SQLite trigger enforces the same rule at
 the database boundary. Active tasks are ordered by priority and due date.
 
-### Temporary Supabase-backed feature data
+### Local SQLite conversations and practical assessments
 
-Conversations and practical-assessment persistence have not moved to SQLite
-yet. Their existing Supabase schemas and settings remain temporarily while
-those features are migrated sequentially. Locally issued JWTs are not Supabase
-access tokens, so calls from those feature services to Supabase will not satisfy
-the existing RLS policies during this transition.
-
-Run `backend/supabase/chat_messages.sql` in the Supabase SQL editor. It creates
-the named-conversation and ordered-message tables, upgrades any rows from the
-old flat history schema, and installs ownership constraints, indexes, grants,
-triggers, and Row Level Security policies. Also run
-`backend/supabase/practical_assessment.sql` for each user's one-time learner
-profile. Then configure `backend/.env`:
+Conversations, ordered chat messages, and practical-assessment records are
+stored in the same local SQLite database as authentication and tasks. FastAPI
+creates the required tables, ownership constraints, indexes, and triggers at
+startup. No separate schema command or external database service is required.
+Configure the local paths and chat-context limit in `backend/.env`:
 
 ```env
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_API_KEY=your-publishable-or-anon-key
-# Server-only secret key used for trusted profile writes. Never expose it
-# through a NEXT_PUBLIC_* variable.
-SUPABASE_SECRET_KEY=your-sb_secret-key-or-legacy-service-role-jwt
-SUPABASE_CONVERSATIONS_TABLE=conversations
-SUPABASE_CHAT_MESSAGES_TABLE=chat_messages
-SUPABASE_PRACTICAL_ASSESSMENTS_TABLE=practical_assessments
+DATABASE_URL=sqlite:///data/electromentor.db
 CHAT_HISTORY_MESSAGE_LIMIT=7
+PRACTICAL_ASSESSMENT_VIDEO_DIRECTORY=data/practical_assessment_videos
+PRACTICAL_ASSESSMENT_MAX_VIDEO_BYTES=100000000
 ```
-
-Keep `SUPABASE_SECRET_KEY` on the backend only.
-`SUPABASE_API_KEY` should be the project's publishable or legacy anon key; the
-backend feature repositories still use the Supabase Data API until their local
-SQLite migration is completed.
 
 Users can list, create, open, rename, and delete only their own conversations.
 Sending a message stores the user turn, loads only the latest
@@ -165,20 +149,17 @@ seven prior messages from that conversation for Gemini, then stores the grounded
 assistant answer and its RAG citations. Opening a conversation returns its full
 stored history for the frontend.
 
-The authenticated `/api/v1/practical-assessments` workflow creates a one-time
-electrical learner profile. It accepts an optional MP4/MOV/WebM introduction
-video and returns ten fixed questions about the user's experience, training,
-safety habits, tools, troubleshooting approach, documentation, support needs,
-and learning preferences. Gemini suggests only answers directly supported by
-the video; unsupported answers stay empty, and every suggestion remains editable
-before all ten final question-and-answer records are saved for that user.
+The authenticated `/api/v1/practical-assessments` workflow accepts a required
+MP4, MOV, or WebM practical-work video and generates ten questions. The video is
+kept in the configured private server directory; SQLite stores its private path,
+metadata, questions, editable answers, and evaluation. Video files are never
+placed in the frontend's public directory or exposed through a public URL.
 
-Gemini then produces self-reported competency estimates and learning suggestions,
-not a work evaluation, qualification, or safety certification. Raw video bytes
-are not stored in Supabase. Once completed, the profile row is immutable and its
-compact summary is included as untrusted personalization context in later RAG
-chats without weakening electrical-safety instructions. See
-`backend/supabase/README.md` for the endpoint and migration details.
+Gemini suggests only answers supported by the video. Unsupported answers stay
+empty, and every suggestion remains editable before evaluation. A user may have
+one active draft and any number of completed assessments. Completed results are
+available through the authenticated history and detail endpoints and cannot be
+edited.
 
 ### Ingest all PDFs
 
@@ -222,6 +203,14 @@ file sizes, categories, and stable document IDs. The authenticated
 `GET /api/v1/safety-checklists/{checklist_id}/file` endpoint opens the selected
 PDF inline; add `?download=true` to request attachment disposition. Adding or
 removing a PDF does not require a code change or database migration.
+
+The authenticated `POST /api/v1/safety-checklists/generate` endpoint sends a
+specific electrical-task description to Gemini and returns schema-validated JSON
+with a title, task summary, ordered sections, and prioritized checklist items. The
+same structured response reports `invalid_prompt` with no checklist content when
+the input is gibberish, unrelated, or too vague. The frontend calls this real
+endpoint by default; `NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=true` explicitly enables
+the local preview response instead.
 
 ### Wiring and circuit guide PDFs
 

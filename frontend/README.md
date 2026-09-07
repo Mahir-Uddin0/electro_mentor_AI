@@ -62,7 +62,7 @@ Conversation history uses these FastAPI routes under `/api/v1`:
 
 Photo fault detection sends an authenticated multipart request to `POST /photo-analysis` with the selected file in the `image` field. Accepted formats are JPG, PNG, WebP, HEIC, and HEIF up to 14 MB. Completed reports are retained only for the current user and browser session; the backend does not persist photo reports yet.
 
-The safety-checklist library loads live PDF metadata from `GET /safety-checklists` and fetches a selected file from `GET /safety-checklists/{checklist_id}/file`. Both requests carry the current backend access token. PDFs can be viewed inside the application or downloaded without exposing a server filesystem path.
+The safety-checklist library loads live PDF metadata from `GET /safety-checklists` and fetches a selected file from `GET /safety-checklists/{checklist_id}/file`. The generator sends the task to `POST /safety-checklists/generate` and renders the returned Gemini-generated sections and prioritized items. All requests carry the current backend access token. PDFs can be viewed inside the application or downloaded without exposing a server filesystem path.
 
 The wiring and circuit guide library follows the same authenticated flow through `GET /guides` and `GET /guides/{guide_id}/file`. Titles, descriptions, categories, page counts, file sizes, update times, and IDs come from the backend PDF catalog rather than static frontend data.
 
@@ -73,16 +73,23 @@ The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
 
 Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in the backend's local SQLite database through FastAPI.
 
-The one-time learner-profile questionnaire uses authenticated FastAPI routes under `/api/v1`:
+The practical-work assessment uses authenticated FastAPI routes under `/api/v1`:
 
-- `GET /practical-assessments/me` loads the current user's draft or completed profile and the fixed questionnaire/checklist definitions.
-- `POST /practical-assessments` starts the profile with an optional MP4, MOV, or WebM introduction video up to 100 MB.
+- `GET /practical-assessments/me` loads the current user's active draft or latest completed assessment.
+- `GET /practical-assessments/history` and `GET /practical-assessments/{assessment_id}` load completed SQLite-backed results.
+- `POST /practical-assessments` starts an assessment from a required MP4, MOV, or WebM work video up to 100 MB.
+- `POST /practical-assessments/{assessment_id}/generate-answers` analyzes the privately stored video.
 - `PUT /practical-assessments/{assessment_id}/answers` saves all ten editable answers.
-- `POST /practical-assessments/{assessment_id}/evaluate` creates and stores the personalized learner profile from the user's final answers and any supported video information.
+- `POST /practical-assessments/{assessment_id}/evaluate` scores and completes the assessment.
 
-The six profile screens share one provider, so a draft can move between the question and answer steps without static placeholder data. Gemini fills only answers supported by the optional video; every answer remains user-editable before final submission. Completed profile scores, learning suggestions, and the competency checklist are rendered from the saved user-specific record. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to use this backend flow.
+The assessment screens share one provider, so a draft can move between stages
+without static placeholder data. Gemini fills only answers supported by the
+video; every answer remains user-editable before evaluation. The backend stores
+assessment records in SQLite and videos in a private server directory outside
+the frontend's public files. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to
+use this backend flow.
 
-The remaining temporary frontend contract expects `GET /dashboard` and `POST /checklists/generate`. While the relevant mock switch is enabled, matching local handlers under `/api/mock/*` supply deterministic responses.
+The remaining temporary frontend contract expects `GET /dashboard`. While the general mock switch is enabled, the matching local handler under `/api/mock/*` supplies its deterministic response. Set `NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=true` only when a deterministic checklist-generator preview is desired instead of Gemini.
 
 ## Progressive Web App
 
