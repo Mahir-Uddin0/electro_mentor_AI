@@ -60,8 +60,42 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => setMobileOpen(false), [pathname]);
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-  }, [dark]);
+    const readTheme = () => {
+      const saved =
+        window.localStorage.getItem("electromentor-theme") ??
+        window.localStorage.getItem("electromentor-landing-theme");
+      return saved
+        ? saved === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+    const isDark = readTheme();
+    setDark(isDark);
+    document.documentElement.dataset.theme = isDark ? "dark" : "light";
+
+    const syncTheme = (event: StorageEvent) => {
+      if (
+        event.key === null ||
+        event.key === "electromentor-theme" ||
+        event.key === "electromentor-landing-theme"
+      ) {
+        const nextDark = readTheme();
+        setDark(nextDark);
+        document.documentElement.dataset.theme = nextDark ? "dark" : "light";
+      }
+    };
+    window.addEventListener("storage", syncTheme);
+    return () => window.removeEventListener("storage", syncTheme);
+  }, []);
+
+  function toggleDark() {
+    setDark((current) => {
+      const next = !current;
+      document.documentElement.dataset.theme = next ? "dark" : "light";
+      window.localStorage.setItem("electromentor-theme", next ? "dark" : "light");
+      window.localStorage.setItem("electromentor-landing-theme", next ? "dark" : "light");
+      return next;
+    });
+  }
   useEffect(() => {
     if (!loading && !session && !previewMode) {
       router.replace(`/login?next=${encodeURIComponent(pathname)}`);
@@ -149,7 +183,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button key={item} className={language === item ? "active" : ""} onClick={() => setLanguage(item)}>{item.toUpperCase()}</button>
             ))}
           </div>
-          <button className="sidebar-action" onClick={() => setDark((value) => !value)}>
+          <button className="sidebar-action" onClick={toggleDark}>
             <Moon size={17} /> {dark ? t("Light mode") : t("Dark")}
           </button>
           <Link className="sidebar-action" href="/settings">

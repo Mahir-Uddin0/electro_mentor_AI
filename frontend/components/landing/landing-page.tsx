@@ -631,8 +631,14 @@ export function LandingPage() {
   const [installNotice, setInstallNotice] = useState<"help" | "dismissed" | null>(null);
 
   useEffect(() => {
-    const savedTheme = window.localStorage.getItem("electromentor-landing-theme");
-    setDark(savedTheme ? savedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches);
+    const savedTheme =
+      window.localStorage.getItem("electromentor-theme") ??
+      window.localStorage.getItem("electromentor-landing-theme");
+    const isDark = savedTheme
+      ? savedTheme === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    setDark(isDark);
+    document.documentElement.dataset.theme = isDark ? "dark" : "light";
   }, []);
 
   useEffect(() => {
@@ -658,6 +664,8 @@ export function LandingPage() {
   function toggleTheme() {
     setDark((current) => {
       const next = !current;
+      document.documentElement.dataset.theme = next ? "dark" : "light";
+      window.localStorage.setItem("electromentor-theme", next ? "dark" : "light");
       window.localStorage.setItem("electromentor-landing-theme", next ? "dark" : "light");
       return next;
     });
