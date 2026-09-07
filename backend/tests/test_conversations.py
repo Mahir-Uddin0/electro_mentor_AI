@@ -6,12 +6,13 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import AuthenticatedUser
 from app.db.base import Base
-from app.db.models import Conversation, User
+from app.db.models import ChatMessage, User
 from app.main import app
 from app.schemas.chat import ChatResponse, Message, Source
 from app.schemas.conversations import ConversationMessage, ConversationSummary
@@ -121,8 +122,15 @@ def test_rename_conversation(db_session: Session) -> None:
 def test_delete_conversation(db_session: Session) -> None:
     repo = SQLiteConversationRepository(db_session)
     created = repo.create_conversation(user_id=USER_ID, title="To delete")
+    repo.create_message(
+        conversation_id=created.id,
+        user_id=USER_ID,
+        role="user",
+        content="Delete this with its conversation",
+    )
     repo.delete_conversation(conversation_id=created.id, user_id=USER_ID)
     assert repo.list_conversations(user_id=USER_ID) == []
+    assert db_session.scalars(select(ChatMessage)).all() == []
 
 
 def test_get_nonexistent_conversation_raises(db_session: Session) -> None:
@@ -134,10 +142,10 @@ def test_get_nonexistent_conversation_raises(db_session: Session) -> None:
 def test_create_and_list_messages(db_session: Session) -> None:
     repo = SQLiteConversationRepository(db_session)
     conv = repo.create_conversation(user_id=USER_ID, title="Chat")
-    user_msg = repo.create_message(
+    repo.create_message(
         conversation_id=conv.id, user_id=USER_ID, role="user", content="Hello"
     )
-    assistant_msg = repo.create_message(
+    repo.create_message(
         conversation_id=conv.id,
         user_id=USER_ID,
         role="assistant",
@@ -191,6 +199,54 @@ def test_cross_user_isolation(db_session: Session) -> None:
         repo.get_conversation(conversation_id=conv.id, user_id=other_user_id)
 
     assert repo.list_conversations(user_id=other_user_id) == []
+
+    with pytest.raises(ConversationNotFoundError):
+        repo.create_message(
+            conversation_id=conv.id,
+            user_id=other_user_id,
+            role="user",
+            content="Cross-user message",
+        )
+
+    assert db_session.scalars(select(ChatMessage)).all() == []
+
+
+def test_database_rejects_mismatched_conversation_message_owner(
+    db_session: Session,
+) -> None:
+    other_user_id = uuid4()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    db_session.add(
+        User(
+            id=str(other_user_id),
+            email="other-owner@example.com",
+            password_hash="placeholder",
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    repo = SQLiteConversationRepository(db_session)
+    conv = repo.create_conversation(user_id=USER_ID, title="Owned conversation")
+    db_session.add(
+        ChatMessage(
+            id=str(uuid4()),
+            conversation_id=str(conv.id),
+            user_id=str(other_user_id),
+            role="user",
+            content="Cross-user message",
+            sources="[]",
+            created_at=now,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    assert db_session.scalars(select(ChatMessage)).all() == []
 
 
 # ---------------------------------------------------------------------------

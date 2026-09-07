@@ -9,10 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.db.models import ChatMessage, Conversation, User
-from app.services.chat_history import (
-    ChatHistoryProviderError,
-    SQLiteChatHistoryService,
-)
+from app.services.chat_history import SQLiteChatHistoryService
 
 USER_ID = UUID("d2f7c64a-3e56-4d45-a47d-07331e2a95df")
 
@@ -45,7 +42,9 @@ def db_session():
         yield session
 
 
-def test_fetches_latest_messages_and_returns_chronologically(db_session: Session) -> None:
+def test_fetches_latest_messages_and_returns_chronologically(
+    db_session: Session,
+) -> None:
     now = datetime.now(UTC).replace(tzinfo=None)
     conv_id = str(uuid4())
     db_session.add(
