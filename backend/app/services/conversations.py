@@ -23,14 +23,6 @@ from app.schemas.conversations import (
 from app.services.chat import ChatService, get_chat_service
 
 
-class ConversationConfigurationError(RuntimeError):
-    """Raised when conversation storage has not been configured."""
-
-
-class ConversationMigrationRequiredError(ConversationConfigurationError):
-    """Kept for backward-compatible error handling in the endpoint layer."""
-
-
 class ConversationProviderError(RuntimeError):
     """Raised when local conversation persistence fails."""
 
@@ -218,6 +210,10 @@ class SQLiteConversationRepository:
         content: str,
         sources: list[Source] | None = None,
     ) -> ConversationMessage:
+        self._get_owned_conversation(
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
         now = _utcnow()
         record = ChatMessage(
             id=str(uuid4()),

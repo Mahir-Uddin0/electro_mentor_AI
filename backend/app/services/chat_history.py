@@ -1,6 +1,5 @@
 """Read an authenticated user's recent messages from the local SQLite database."""
 
-import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,10 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ChatMessage
 from app.schemas.chat_history import ChatHistoryMessage
-
-
-class ChatHistoryConfigurationError(RuntimeError):
-    """Raised when chat history storage is not configured."""
 
 
 class ChatHistoryProviderError(RuntimeError):
