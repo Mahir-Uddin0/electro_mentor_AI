@@ -1,0 +1,48 @@
+// Discover only containers explicitly opted in by this Compose project.
+discovery.docker "electromentor" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "5s"
+
+	filter {
+		name   = "label"
+		values = ["com.electromentor.logs=true"]
+	}
+}
+
+// Keep labels bounded to service-level metadata; never promote user data,
+// request paths, tokens, or container IDs into Loki labels.
+discovery.relabel "electromentor" {
+	targets = []
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		regex         = "(.+)"
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = "(.+)"
+		target_label  = "compose_project"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+}
+
+loki.source.docker "electromentor" {
+	host             = "unix:///var/run/docker.sock"
+	targets          = discovery.docker.electromentor.targets
+	relabel_rules    = discovery.relabel.electromentor.rules
+	refresh_interval = "5s"
+	forward_to       = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

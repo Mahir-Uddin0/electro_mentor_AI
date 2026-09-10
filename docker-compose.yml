@@ -1,5 +1,6 @@
 services:
   backend:
+    image: ${BACKEND_IMAGE:-electro_mentor_ai-backend:latest}
     build:
       context: ./backend
     environment:
@@ -11,6 +12,10 @@ services:
       - "8000:8000"
     volumes:
       - backend_data:/app/data
+    labels:
+      com.electromentor.logs: "true"
+    networks:
+      - electromentor
     healthcheck:
       test:
         - CMD
@@ -24,6 +29,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: ${FRONTEND_IMAGE:-electro_mentor_ai-frontend:latest}
     build:
       context: ./frontend
       args:
@@ -35,6 +41,10 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
+    labels:
+      com.electromentor.logs: "true"
+    networks:
+      - electromentor
     healthcheck:
       test:
         - CMD
@@ -47,5 +57,117 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.11.3
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    depends_on:
+      backend:
+        condition: service_healthy
+    expose:
+      - "9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - electromentor
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - --quiet
+        - http://127.0.0.1:9090/-/ready
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.4
+    command:
+      - -config.file=/etc/loki/config.yml
+    expose:
+      - "3100"
+    volumes:
+      - ./monitoring/loki/config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    networks:
+      - electromentor
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/loki
+        - -health
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.18.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    depends_on:
+      loki:
+        condition: service_healthy
+    expose:
+      - "12345"
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    networks:
+      - electromentor
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in the root .env file}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - electromentor
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - --quiet
+        - http://127.0.0.1:3000/api/health
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   backend_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  alloy_data:
+
+networks:
+  electromentor:
+    driver: bridge
