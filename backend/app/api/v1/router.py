@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    api_keys,
     auth,
     chat,
     conversations,
@@ -15,6 +16,11 @@ from app.api.v1.endpoints import (
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
+api_router.include_router(
+    api_keys.router,
+    prefix="/settings/gemini-api-key",
+    tags=["settings"],
+)
 api_router.include_router(guides.router, prefix="/guides", tags=["guides"])
 api_router.include_router(
     conversations.router,
