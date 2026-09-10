@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from app.core.config import get_settings
 from app.core.language import ai_language_instruction
+from app.observability import track_ai_feature, track_rag_request
 from app.schemas.chat import ChatRequest, ChatResponse, Message, Source
 from app.services.llm import LLMClient, get_llm_client
 from app.services.retriever import Retriever, get_retriever
@@ -32,38 +33,40 @@ class ChatService:
         conversation_id: UUID,
         history: list[Message],
     ) -> ChatResponse:
-        settings = get_settings()
-        documents = await self._retriever.search(
-            message, top_k=settings.retrieval_top_k
-        )
-        context = "\n\n".join(
-            f"[{document.id}] {document.title}\n{document.content}"
-            for document in documents
-        ) or "No relevant documents were retrieved."
-        messages = [
-            {
-                "role": "system",
-                "content": f"{SYSTEM_PROMPT}\n{ai_language_instruction()}",
-            },
-            *[history_message.model_dump() for history_message in history],
-            {
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion:\n{message}",
-            },
-        ]
-        answer = await self._llm.complete(messages)
-        return ChatResponse(
-            conversation_id=conversation_id,
-            answer=answer,
-            sources=[
-                Source(
-                    id=document.id,
-                    title=document.title,
-                    excerpt=document.content[:240],
+        with track_ai_feature("assistant"):
+            settings = get_settings()
+            with track_rag_request():
+                documents = await self._retriever.search(
+                    message, top_k=settings.retrieval_top_k
                 )
+            context = "\n\n".join(
+                f"[{document.id}] {document.title}\n{document.content}"
                 for document in documents
-            ],
-        )
+            ) or "No relevant documents were retrieved."
+            messages = [
+                {
+                    "role": "system",
+                    "content": f"{SYSTEM_PROMPT}\n{ai_language_instruction()}",
+                },
+                *[history_message.model_dump() for history_message in history],
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion:\n{message}",
+                },
+            ]
+            answer = await self._llm.complete(messages)
+            return ChatResponse(
+                conversation_id=conversation_id,
+                answer=answer,
+                sources=[
+                    Source(
+                        id=document.id,
+                        title=document.title,
+                        excerpt=document.content[:240],
+                    )
+                    for document in documents
+                ],
+            )
 
     async def close(self) -> None:
         for resource in (self._llm, self._retriever):

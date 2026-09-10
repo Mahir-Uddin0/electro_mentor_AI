@@ -11,6 +11,7 @@ from fastapi import Depends
 from app.api.dependencies import get_optional_gemini_api_key
 from app.core.config import get_settings
 from app.core.language import ai_language_instruction, get_response_language
+from app.observability import track_ai_feature
 from app.schemas.safety_checklists import (
     GeminiChecklistGeneration,
     SafetyChecklistGenerationResponse,
@@ -173,22 +174,23 @@ class SafetyChecklistGenerationService:
         self._generator = generator
 
     async def generate(self, task: str) -> SafetyChecklistGenerationResponse:
-        result = await self._generator.generate(task)
-        if result.outcome == "invalid_prompt":
-            result = result.model_copy(
-                update={
-                    "message": (
-                        INVALID_PROMPT_MESSAGE_BN
-                        if get_response_language() == "bn"
-                        else INVALID_PROMPT_MESSAGE_EN
-                    )
-                }
+        with track_ai_feature("safety_checklist"):
+            result = await self._generator.generate(task)
+            if result.outcome == "invalid_prompt":
+                result = result.model_copy(
+                    update={
+                        "message": (
+                            INVALID_PROMPT_MESSAGE_BN
+                            if get_response_language() == "bn"
+                            else INVALID_PROMPT_MESSAGE_EN
+                        )
+                    }
+                )
+            return SafetyChecklistGenerationResponse(
+                **result.model_dump(),
+                generation_id=uuid4(),
+                generated_at=datetime.now(UTC),
             )
-        return SafetyChecklistGenerationResponse(
-            **result.model_dump(),
-            generation_id=uuid4(),
-            generated_at=datetime.now(UTC),
-        )
 
 
 def get_safety_checklist_generator(

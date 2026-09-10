@@ -25,6 +25,7 @@ from app.core.language import ai_language_instruction
 from app.core.security import AuthenticatedUser
 from app.db.models import PracticalAssessmentRecord
 from app.db.session import get_db_session
+from app.observability import track_ai_feature
 from app.schemas.practical_assessments import (
     COMPETENCY_IDS,
     COMPETENCY_LABELS,
@@ -1057,12 +1058,13 @@ class PracticalAssessmentService:
                 video=video,
             )
             uploaded = True
-            questions = await self._analyzer.generate_questions(video)
-            _require_json_size(
-                [question.model_dump(mode="json") for question in questions],
-                label="Generated assessment questions",
-                max_bytes=_DATABASE_QUESTIONS_SAFE_BYTES,
-            )
+            with track_ai_feature("practical_assessment_questions"):
+                questions = await self._analyzer.generate_questions(video)
+                _require_json_size(
+                    [question.model_dump(mode="json") for question in questions],
+                    label="Generated assessment questions",
+                    max_bytes=_DATABASE_QUESTIONS_SAFE_BYTES,
+                )
             answers = [
                 AssessmentAnswer(question_id=question_id)
                 for question_id in QUESTION_IDS
@@ -1136,10 +1138,11 @@ class PracticalAssessmentService:
             max_bytes=self._max_video_bytes,
         )
         try:
-            inference = await self._analyzer.generate_answers(
-                video,
-                current.questions,
-            )
+            with track_ai_feature("practical_assessment_answers"):
+                inference = await self._analyzer.generate_answers(
+                    video,
+                    current.questions,
+                )
         finally:
             video.cleanup()
         stored_inference = StoredVideoAnalysis(
@@ -1218,7 +1221,8 @@ class PracticalAssessmentService:
             max_bytes=self._max_video_bytes,
         )
         try:
-            evaluation = await self._analyzer.evaluate(video, current)
+            with track_ai_feature("practical_assessment_evaluation"):
+                evaluation = await self._analyzer.evaluate(video, current)
         finally:
             video.cleanup()
 

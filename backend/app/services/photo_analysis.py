@@ -12,6 +12,7 @@ from fastapi import Depends
 from app.api.dependencies import get_optional_gemini_api_key
 from app.core.config import get_settings
 from app.core.language import ai_language_instruction, get_response_language
+from app.observability import track_ai_feature
 from app.schemas.photo_analysis import PhotoAnalysisFindings, PhotoAnalysisResponse
 from app.services.gemini_fallback import generate_content_with_fallback
 
@@ -207,16 +208,17 @@ class PhotoAnalysisService:
         self._analyzer = analyzer
 
     async def analyze(self, photo: ValidatedPhoto) -> PhotoAnalysisResponse:
-        findings = await self._analyzer.analyze(
-            image_bytes=photo.data,
-            mime_type=photo.mime_type,
-        )
-        findings = _enforce_safety_language(findings)
-        return PhotoAnalysisResponse(
-            **findings.model_dump(),
-            analysis_id=uuid4(),
-            analyzed_at=datetime.now(UTC),
-        )
+        with track_ai_feature("photo_analysis"):
+            findings = await self._analyzer.analyze(
+                image_bytes=photo.data,
+                mime_type=photo.mime_type,
+            )
+            findings = _enforce_safety_language(findings)
+            return PhotoAnalysisResponse(
+                **findings.model_dump(),
+                analysis_id=uuid4(),
+                analyzed_at=datetime.now(UTC),
+            )
 
 
 def _enforce_safety_language(
