@@ -242,7 +242,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </main>
       </div>
-      <Link href="/assistant" className="floating-assistant" aria-label={t("Open AI Assistant")}><Bot size={21} /></Link>
+      {!pathname.startsWith("/assistant") && (
+        <Link href="/assistant" className="floating-assistant" aria-label={t("Open AI Assistant")}><Bot size={21} /></Link>
+      )}
     </div>
   );
 }
