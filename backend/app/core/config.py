@@ -32,8 +32,14 @@ class Settings(BaseSettings):
     auth_access_token_minutes: int = Field(default=15, ge=1, le=1_440)
     auth_refresh_token_days: int = Field(default=14, ge=1, le=90)
 
+    # Used only by the backend to encrypt user-supplied Gemini API keys at
+    # rest. Generate an independent secret; do not reuse AUTH_JWT_SECRET.
+    api_key_encryption_secret: SecretStr | None = Field(default=None, min_length=32)
+
     chat_history_message_limit: int = Field(default=7, ge=1, le=100)
 
+    # Retained for offline document ingestion only. Runtime AI requests use
+    # the authenticated user's encrypted credential from the database.
     gemini_api_key: str | None = None
     gemini_generation_model: str = "gemini-3.7-flash"
     # Ordered from stronger to smaller. A primary model already in this list
