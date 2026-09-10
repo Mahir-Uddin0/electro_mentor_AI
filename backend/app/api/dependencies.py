@@ -17,6 +17,11 @@ from app.core.security import (
 from app.db.models import User
 from app.db.session import get_db_session
 from app.schemas.chat_history import ChatHistoryMessage
+from app.services.api_keys import (
+    ApiKeyConfigurationError,
+    ApiKeyEncryptionError,
+    GeminiApiKeyService,
+)
 from app.services.chat_history import (
     ChatHistoryProviderError,
     SQLiteChatHistoryService,
@@ -75,6 +80,43 @@ def get_current_user(
         email=user.email,
         display_name=user.display_name,
         claims=token_user.claims,
+    )
+
+
+def get_optional_gemini_api_key(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> str | None:
+    """Reveal the current user's key only inside the backend request scope."""
+
+    secret = (
+        settings.api_key_encryption_secret.get_secret_value()
+        if settings.api_key_encryption_secret is not None
+        else None
+    )
+    service = GeminiApiKeyService(session, encryption_secret=secret)
+    try:
+        return service.reveal_for_backend(user.id)
+    except ApiKeyConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Secure API-key storage is not configured on the server.",
+        ) from exc
+    except ApiKeyEncryptionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Your saved Gemini API key could not be read. "
+                "Delete it in Settings and add it again."
+            ),
+        ) from exc
+
+
+def gemini_api_key_required() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+        detail="Add your Gemini API key in Settings to use AI features.",
     )
 
 

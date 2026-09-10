@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import (
     AuthenticatedChatContext,
+    gemini_api_key_required,
     get_authenticated_chat_context,
     get_current_user,
 )
@@ -17,7 +18,7 @@ from app.services.conversations import (
     ConversationService,
     get_conversation_service,
 )
-from app.services.llm import LLMProviderError
+from app.services.llm import LLMConfigurationError, LLMProviderError
 
 router = APIRouter()
 
@@ -64,6 +65,8 @@ async def create_chat_completion(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Conversation storage is temporarily unavailable.",
         ) from exc
+    except LLMConfigurationError as exc:
+        raise gemini_api_key_required() from exc
     except LLMProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

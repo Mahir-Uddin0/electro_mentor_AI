@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import gemini_api_key_required, get_current_user
 from app.core.security import AuthenticatedUser
 from app.schemas.conversations import (
     ConversationCreate,
@@ -22,7 +22,7 @@ from app.services.conversations import (
     ConversationService,
     get_conversation_service,
 )
-from app.services.llm import LLMProviderError
+from app.services.llm import LLMConfigurationError, LLMProviderError
 
 router = APIRouter()
 
@@ -125,6 +125,8 @@ async def send_conversation_message(
         raise _not_found() from exc
     except ConversationProviderError as exc:
         raise _storage_unavailable() from exc
+    except LLMConfigurationError as exc:
+        raise gemini_api_key_required() from exc
     except LLMProviderError as exc:
         # The user turn has already been persisted at this point. The frontend
         # may retry without losing what the user asked.

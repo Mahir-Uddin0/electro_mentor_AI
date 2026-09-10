@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_optional_gemini_api_key
 from app.core.security import AuthenticatedUser
 from app.db.models import ChatMessage, Conversation
 from app.db.session import get_db_session
@@ -21,6 +22,7 @@ from app.schemas.conversations import (
     SendConversationMessageResponse,
 )
 from app.services.chat import ChatService, get_chat_service
+from app.services.llm import LLMConfigurationError
 
 
 class ConversationProviderError(RuntimeError):
@@ -265,9 +267,11 @@ class ConversationService:
         repository: SQLiteConversationRepository,
         context_message_limit: int,
         chat_service: ChatService | None = None,
+        gemini_api_key: str | None = None,
     ) -> None:
         self._repository = repository
         self._chat_service = chat_service
+        self._gemini_api_key = gemini_api_key
         self._context_message_limit = context_message_limit
 
     def list_conversations(
@@ -326,6 +330,8 @@ class ConversationService:
             conversation_id=conversation_id,
             user_id=user.id,
         )
+        if self._chat_service is None and not self._gemini_api_key:
+            raise LLMConfigurationError("A user Gemini API key is required")
         recent_messages = self._repository.fetch_recent_messages(
             conversation_id=conversation_id,
             user_id=user.id,
@@ -345,15 +351,22 @@ class ConversationService:
                 title=_title_from_prompt(message),
             )
 
-        chat_service = self._chat_service or get_chat_service()
-        generated: ChatResponse = await chat_service.generate(
-            message=message,
-            conversation_id=conversation_id,
-            history=[
-                Message(role=m.role, content=m.content)
-                for m in recent_messages
-            ],
+        owns_chat_service = self._chat_service is None
+        chat_service = self._chat_service or get_chat_service(
+            self._gemini_api_key or ""
         )
+        try:
+            generated: ChatResponse = await chat_service.generate(
+                message=message,
+                conversation_id=conversation_id,
+                history=[
+                    Message(role=m.role, content=m.content)
+                    for m in recent_messages
+                ],
+            )
+        finally:
+            if owns_chat_service:
+                await chat_service.close()
         assistant_message = self._repository.create_message(
             conversation_id=conversation_id,
             user_id=user.id,
@@ -389,6 +402,10 @@ def _title_from_prompt(prompt: str, max_length: int = 72) -> str:
 
 def get_conversation_service(
     session: Annotated[Session, Depends(get_db_session)],
+    gemini_api_key: Annotated[
+        str | None,
+        Depends(get_optional_gemini_api_key),
+    ],
 ) -> ConversationService:
     from app.core.config import get_settings
 
@@ -396,4 +413,5 @@ def get_conversation_service(
     return ConversationService(
         repository=SQLiteConversationRepository(session),
         context_message_limit=settings.chat_history_message_limit,
+        gemini_api_key=gemini_api_key,
     )

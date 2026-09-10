@@ -1,4 +1,4 @@
-from functools import lru_cache
+import inspect
 from uuid import UUID, uuid4
 
 from app.core.config import get_settings
@@ -65,7 +65,18 @@ class ChatService:
             ],
         )
 
+    async def close(self) -> None:
+        for resource in (self._llm, self._retriever):
+            close = getattr(resource, "close", None)
+            if close is None:
+                continue
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
-@lru_cache
-def get_chat_service() -> ChatService:
-    return ChatService(retriever=get_retriever(), llm=get_llm_client())
+
+def get_chat_service(api_key: str) -> ChatService:
+    return ChatService(
+        retriever=get_retriever(api_key),
+        llm=get_llm_client(api_key),
+    )

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from fastapi.responses import FileResponse
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import gemini_api_key_required, get_current_user
 from app.core.security import AuthenticatedUser
 from app.schemas.safety_checklists import (
     SafetyChecklistGenerationRequest,
@@ -58,10 +58,7 @@ async def generate_safety_checklist(
     try:
         return await service.generate(request.task)
     except SafetyChecklistConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini safety-checklist generation is not configured.",
-        ) from exc
+        raise gemini_api_key_required() from exc
     except SafetyChecklistProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

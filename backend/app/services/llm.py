@@ -1,4 +1,3 @@
-from functools import lru_cache
 from typing import Protocol
 
 from app.core.config import get_settings
@@ -9,6 +8,10 @@ class LLMProviderError(RuntimeError):
     pass
 
 
+class LLMConfigurationError(RuntimeError):
+    pass
+
+
 class LLMClient(Protocol):
     async def complete(self, messages: list[dict[str, str]]) -> str: ...
 
@@ -16,17 +19,14 @@ class LLMClient(Protocol):
 class GeminiLLMClient:
     """Generate chat responses through the Gemini Developer API."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str) -> None:
         settings = get_settings()
-        if not settings.gemini_api_key:
-            raise ValueError(
-                "GEMINI_API_KEY is required for Gemini chat inference. "
-                "Set it in the project .env file."
-            )
+        if not api_key:
+            raise LLMConfigurationError("A user Gemini API key is required")
 
         from google import genai
 
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self._client = genai.Client(api_key=api_key)
         self._model = settings.gemini_generation_model
         self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_generation_max_output_tokens
@@ -81,16 +81,9 @@ class GeminiLLMClient:
         await self._client.aio.aclose()
 
 
-@lru_cache
-def get_llm_client() -> LLMClient:
-    return GeminiLLMClient()
+def get_llm_client(api_key: str) -> LLMClient:
+    return GeminiLLMClient(api_key)
 
 
 async def close_llm_client() -> None:
-    if not get_llm_client.cache_info().currsize:
-        return
-    client = get_llm_client()
-    close = getattr(client, "close", None)
-    if close is not None:
-        await close()
-    get_llm_client.cache_clear()
+    """Compatibility hook; Gemini chat clients are closed per request."""

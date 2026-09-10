@@ -1,11 +1,14 @@
 """Gemini-backed, structured electrical safety-checklist generation."""
 
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from functools import lru_cache
-from typing import Protocol
+from typing import Annotated, Protocol
 from uuid import uuid4
 
+from fastapi import Depends
+
+from app.api.dependencies import get_optional_gemini_api_key
 from app.core.config import get_settings
 from app.core.language import ai_language_instruction, get_response_language
 from app.schemas.safety_checklists import (
@@ -85,9 +88,9 @@ class SafetyChecklistGenerator(Protocol):
 class GeminiSafetyChecklistGenerator:
     """Generate and validate a checklist with the Gemini Developer API."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         settings = get_settings()
-        self._api_key = settings.gemini_api_key
+        self._api_key = api_key
         self._model = settings.gemini_checklist_model
         self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_checklist_max_output_tokens
@@ -188,19 +191,21 @@ class SafetyChecklistGenerationService:
         )
 
 
-@lru_cache
-def get_safety_checklist_generator() -> GeminiSafetyChecklistGenerator:
-    return GeminiSafetyChecklistGenerator()
+def get_safety_checklist_generator(
+    api_key: str | None = None,
+) -> GeminiSafetyChecklistGenerator:
+    return GeminiSafetyChecklistGenerator(api_key)
 
 
-@lru_cache
-def get_safety_checklist_generation_service() -> SafetyChecklistGenerationService:
-    return SafetyChecklistGenerationService(get_safety_checklist_generator())
+async def get_safety_checklist_generation_service(
+    api_key: Annotated[str | None, Depends(get_optional_gemini_api_key)],
+) -> AsyncIterator[SafetyChecklistGenerationService]:
+    generator = get_safety_checklist_generator(api_key)
+    try:
+        yield SafetyChecklistGenerationService(generator)
+    finally:
+        await generator.close()
 
 
 async def close_safety_checklist_generation_service() -> None:
-    if not get_safety_checklist_generator.cache_info().currsize:
-        return
-    await get_safety_checklist_generator().close()
-    get_safety_checklist_generation_service.cache_clear()
-    get_safety_checklist_generator.cache_clear()
+    """Compatibility hook; generators are closed after each request."""

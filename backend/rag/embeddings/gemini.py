@@ -208,6 +208,9 @@ class GeminiEmbedder:
             )
         return vectors
 
+    def close(self) -> None:
+        self._client.close()
+
     def _iter_batches(
         self,
         texts: list[str],

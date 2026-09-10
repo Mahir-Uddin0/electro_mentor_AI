@@ -1,6 +1,5 @@
 import asyncio
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Protocol
 
 from app.core.config import get_settings, resolve_project_path
@@ -49,17 +48,14 @@ class ChromaRetriever:
             for match in matches
         ]
 
+    def close(self) -> None:
+        self._embedder.close()
 
-@lru_cache
-def get_retriever() -> Retriever:
+
+def get_retriever(api_key: str) -> Retriever:
     settings = get_settings()
-    if not settings.gemini_api_key:
-        raise ValueError(
-            "GEMINI_API_KEY is required for semantic retrieval. "
-            "Set it in the project .env file."
-        )
     embedder = GeminiEmbedder(
-        api_key=settings.gemini_api_key,
+        api_key=api_key,
         model=settings.gemini_embedding_model,
         dimensions=settings.gemini_embedding_dimensions,
         batch_size=settings.gemini_embedding_batch_size,

@@ -5,9 +5,9 @@ import hashlib
 import json
 import shutil
 import tempfile
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Protocol
 from uuid import UUID, uuid4
@@ -19,6 +19,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_optional_gemini_api_key
 from app.core.config import Settings, get_settings, resolve_project_path
 from app.core.language import ai_language_instruction
 from app.core.security import AuthenticatedUser
@@ -268,9 +269,9 @@ def _detect_video_mime_type(header: bytes) -> str | None:
 class GeminiPracticalAssessmentAnalyzer:
     """Run four small Gemini assessment calls with strict local validation."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         settings = get_settings()
-        self._api_key = settings.gemini_api_key
+        self._api_key = api_key
         self._model = settings.gemini_assessment_model
         self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_assessment_max_output_tokens
@@ -1580,29 +1581,34 @@ def _grade_for_score(score: int) -> str:
     return "F"
 
 
-@lru_cache
-def get_practical_assessment_analyzer() -> GeminiPracticalAssessmentAnalyzer:
-    return GeminiPracticalAssessmentAnalyzer()
+def get_practical_assessment_analyzer(
+    api_key: str | None = None,
+) -> GeminiPracticalAssessmentAnalyzer:
+    return GeminiPracticalAssessmentAnalyzer(api_key)
 
 
-def get_practical_assessment_service(
+async def get_practical_assessment_service(
     session: Annotated[Session, Depends(get_db_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> PracticalAssessmentService:
+    api_key: Annotated[str | None, Depends(get_optional_gemini_api_key)],
+) -> AsyncIterator[PracticalAssessmentService]:
     repository = SQLitePracticalAssessmentRepository(
         session=session,
         video_directory=resolve_project_path(
             settings.practical_assessment_video_directory
         ),
     )
-    return PracticalAssessmentService(
+    analyzer = get_practical_assessment_analyzer(api_key)
+    service = PracticalAssessmentService(
         repository=repository,
-        analyzer=get_practical_assessment_analyzer(),
+        analyzer=analyzer,
         max_video_bytes=settings.practical_assessment_max_video_bytes,
     )
+    try:
+        yield service
+    finally:
+        await analyzer.close()
 
 
 async def close_practical_assessment_service() -> None:
-    if get_practical_assessment_analyzer.cache_info().currsize:
-        await get_practical_assessment_analyzer().close()
-        get_practical_assessment_analyzer.cache_clear()
+    """Compatibility hook; analyzers are closed after each request."""

@@ -362,8 +362,8 @@ def test_authenticated_endpoint_returns_structured_analysis() -> None:
     [
         (
             PhotoAnalysisConfigurationError("missing key"),
-            503,
-            "Gemini image analysis is not configured.",
+            428,
+            "Add your Gemini API key in Settings to use AI features.",
         ),
         (
             PhotoAnalysisProviderError("private provider detail"),

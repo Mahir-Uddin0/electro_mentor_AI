@@ -1,12 +1,15 @@
 """Gemini-powered, safety-focused analysis of electrical wiring photos."""
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
-from typing import Protocol
+from typing import Annotated, Protocol
 from uuid import uuid4
 
+from fastapi import Depends
+
+from app.api.dependencies import get_optional_gemini_api_key
 from app.core.config import get_settings
 from app.core.language import ai_language_instruction, get_response_language
 from app.schemas.photo_analysis import PhotoAnalysisFindings, PhotoAnalysisResponse
@@ -121,9 +124,9 @@ class PhotoAnalyzer(Protocol):
 class GeminiPhotoAnalyzer:
     """Call Gemini with inline image bytes and a Pydantic response schema."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
         settings = get_settings()
-        self._api_key = settings.gemini_api_key
+        self._api_key = api_key
         self._model = settings.gemini_vision_model
         self._fallback_models = settings.gemini_fallback_models
         self._max_output_tokens = settings.gemini_vision_max_output_tokens
@@ -325,19 +328,19 @@ def _detect_image_mime_type(data: bytes) -> str | None:
     return None
 
 
-@lru_cache
-def get_photo_analyzer() -> GeminiPhotoAnalyzer:
-    return GeminiPhotoAnalyzer()
+def get_photo_analyzer(api_key: str | None = None) -> GeminiPhotoAnalyzer:
+    return GeminiPhotoAnalyzer(api_key)
 
 
-@lru_cache
-def get_photo_analysis_service() -> PhotoAnalysisService:
-    return PhotoAnalysisService(get_photo_analyzer())
+async def get_photo_analysis_service(
+    api_key: Annotated[str | None, Depends(get_optional_gemini_api_key)],
+) -> AsyncIterator[PhotoAnalysisService]:
+    analyzer = get_photo_analyzer(api_key)
+    try:
+        yield PhotoAnalysisService(analyzer)
+    finally:
+        await analyzer.close()
 
 
 async def close_photo_analysis_service() -> None:
-    if not get_photo_analyzer.cache_info().currsize:
-        return
-    await get_photo_analyzer().close()
-    get_photo_analysis_service.cache_clear()
-    get_photo_analyzer.cache_clear()
+    """Compatibility hook; analyzers are closed after each request."""

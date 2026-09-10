@@ -13,7 +13,7 @@ from fastapi import (
     status,
 )
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import gemini_api_key_required, get_current_user
 from app.core.config import Settings, get_settings
 from app.core.security import AuthenticatedUser
 from app.schemas.practical_assessments import (
@@ -288,10 +288,7 @@ def _conflict(detail: str) -> HTTPException:
 
 def _translate_provider_error(exc: Exception) -> HTTPException:
     if isinstance(exc, PracticalAssessmentConfigurationError):
-        return HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini practical-assessment analysis is not configured.",
-        )
+        return gemini_api_key_required()
     return HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=(

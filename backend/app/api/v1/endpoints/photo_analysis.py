@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import gemini_api_key_required, get_current_user
 from app.core.config import Settings, get_settings
 from app.core.security import AuthenticatedUser
 from app.schemas.photo_analysis import PhotoAnalysisResponse
@@ -67,10 +67,7 @@ async def analyze_photo(
             detail=str(exc),
         ) from exc
     except PhotoAnalysisConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini image analysis is not configured.",
-        ) from exc
+        raise gemini_api_key_required() from exc
     except PhotoAnalysisProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
