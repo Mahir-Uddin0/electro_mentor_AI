@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Bell,
   BookOpen,
   Bot,
   Camera,
@@ -23,6 +22,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { ApiKeyNotice, useApiKey } from "@/components/api-key-provider";
 import { Brand } from "@/components/brand";
 import { useLanguage } from "@/components/language-provider";
 import type { PwaInstallPromptEvent } from "@/components/pwa/service-worker-registrar";
@@ -35,6 +35,16 @@ const navigation = [
   { label: "Safety Checklists", href: "/safety-checklists", icon: CheckSquare },
   { label: "Task Tracker", href: "/practice-tracker", icon: ListChecks },
 ];
+
+function isBlockedAiRoute(pathname: string) {
+  return (
+    pathname.startsWith("/assistant") ||
+    pathname === "/photo-analysis" ||
+    pathname.startsWith("/photo-analysis/review") ||
+    pathname.startsWith("/safety-checklists/generate") ||
+    pathname.startsWith("/assessments/new")
+  );
+}
 
 function getRouteTitle(pathname: string, t: (text: string) => string) {
   if (pathname.startsWith("/guides")) return [t("Guide Library"), t("Learning resources")];
@@ -51,6 +61,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { loading, session, previewMode, user, signOut } = useAuth();
+  const { loading: apiKeyLoading, status: apiKeyStatus } = useApiKey();
   const { language, setLanguage, t } = useLanguage();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(false);
@@ -155,6 +166,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const displayName =
     user?.display_name ?? user?.email?.split("@")[0] ?? "Prince Jayed Khan";
+  const blockedAiRoute = isBlockedAiRoute(pathname);
+  const apiKeyMissing = apiKeyStatus?.configured === false;
 
   return (
     <div className="app-shell">
@@ -215,11 +228,19 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button className="install-button desktop-only" type="button" onClick={() => void installApp()} disabled={appInstalled}>
               {appInstalled ? <Check size={16} /> : <Download size={16} />} {appInstalled ? (language === "bn" ? "ইনস্টল করা আছে" : "Installed") : t("Install")}
             </button>
-            <button className="icon-button notification" aria-label={t("Notifications")}><Bell size={18} /><i>3</i></button>
             <span className="top-avatar">{displayName.slice(0, 1).toUpperCase()}</span>
           </div>
         </header>
-        <main className="page-content">{children}</main>
+        <main className="page-content">
+          {pathname === "/dashboard" && apiKeyMissing && <ApiKeyNotice />}
+          {blockedAiRoute && apiKeyLoading ? (
+            <div className="full-loader"><span className="spinner" /> {t("Checking your API key…")}</div>
+          ) : blockedAiRoute && apiKeyMissing ? (
+            <ApiKeyNotice blocking />
+          ) : (
+            children
+          )}
+        </main>
       </div>
       <Link href="/assistant" className="floating-assistant" aria-label={t("Open AI Assistant")}><Bot size={21} /></Link>
     </div>

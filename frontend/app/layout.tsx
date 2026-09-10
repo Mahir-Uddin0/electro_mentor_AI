@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { AuthProvider } from "@/components/auth/auth-provider";
+import { ApiKeyProvider } from "@/components/api-key-provider";
 import { LanguageProvider } from "@/components/language-provider";
 import { OfflineIndicator } from "@/components/pwa/offline-indicator";
 import { ServiceWorkerRegistrar } from "@/components/pwa/service-worker-registrar";
@@ -48,7 +49,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <LanguageProvider>
           <ServiceWorkerRegistrar />
           <OfflineIndicator />
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider><ApiKeyProvider>{children}</ApiKeyProvider></AuthProvider>
         </LanguageProvider>
       </body>
     </html>

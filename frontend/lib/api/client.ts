@@ -26,6 +26,14 @@ export class ApiError extends Error {
   }
 }
 
+export const API_KEY_REQUIRED_EVENT = "electromentor-api-key-required";
+
+export type GeminiApiKeyStatus = {
+  configured: boolean;
+  masked_key: "****" | null;
+  updated_at: string | null;
+};
+
 export type ConversationRole = "user" | "assistant";
 
 export type ConversationSource = {
@@ -369,6 +377,9 @@ async function apiFetch(
       };
       message = body.detail ?? body.message ?? message;
     } catch {}
+    if (response.status === 428 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(API_KEY_REQUIRED_EVENT));
+    }
     throw new ApiError(
       translate(getStoredLanguage(), message),
       response.status,
@@ -399,6 +410,24 @@ export async function apiBlobRequest(
 }
 
 export const frontendApi = {
+  getGeminiApiKeyStatus: () =>
+    apiRequest<GeminiApiKeyStatus>(
+      "settings/gemini-api-key",
+      { cache: "no-store" },
+      { useMock: false },
+    ),
+  saveGeminiApiKey: (form: HTMLFormElement) =>
+    apiRequest<GeminiApiKeyStatus>(
+      "settings/gemini-api-key",
+      { method: "PUT", body: new FormData(form) },
+      { useMock: false },
+    ),
+  deleteGeminiApiKey: () =>
+    apiRequest<void>(
+      "settings/gemini-api-key",
+      { method: "DELETE" },
+      { useMock: false },
+    ),
   dashboard: () => apiRequest<{ greeting: string }>("dashboard"),
   getMyPracticalAssessment: () =>
     apiRequest<PracticalAssessmentResponse>(
