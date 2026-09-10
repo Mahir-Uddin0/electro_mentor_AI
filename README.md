@@ -9,6 +9,29 @@ This repository contains two applications:
 
 See [`frontend/README.md`](frontend/README.md) for frontend setup, environment variables, and the complete 20-route screen map.
 
+## Docker Compose deployment
+
+Docker Compose runs the production frontend and backend on the same host. The
+frontend proxies browser API calls to the backend over the private Compose
+network, so no public hostname or Nginx configuration is required.
+
+```bash
+cp .env.example .env
+# Set independent AUTH_JWT_SECRET and API_KEY_ENCRYPTION_SECRET values.
+docker compose up --build -d
+docker compose ps
+```
+
+Open the frontend at `http://SERVER_HOST:3000`. FastAPI is exposed at
+`http://SERVER_HOST:8000`, and its existing health endpoint is
+`http://SERVER_HOST:8000/api/v1/health`.
+
+The named `backend_data` volume is mounted at `/app/data`. It retains the
+SQLite database, uploaded assessment videos, generated RAG data, and bundled
+document libraries when the backend container is recreated. To deploy a new
+image without deleting that data, use `docker compose up --build -d`; do not
+run `docker compose down --volumes` unless the stored data should be erased.
+
 ## Frontend quick start
 
 Use Node.js 22 or newer:
@@ -25,7 +48,9 @@ works before the remaining FastAPI endpoints are configured.
 
 ## RAG backend
 
-The project uses the Gemini Developer API for every AI operation. The retrieval
+The project uses the Gemini Developer API for every AI operation. Each signed-in
+user adds their own key in Settings; the backend encrypts it at rest and uses it
+only for that user's runtime requests. The retrieval
 pipeline reads PDFs, converts them to Markdown, creates semantic chunks with
 Gemini embeddings, and persists normalized 768-dimensional vectors in Chroma.
 Runtime search embeds each query with the same Gemini model and queries Chroma
@@ -39,10 +64,14 @@ cd backend
 uv sync
 ```
 
-Put your Gemini API key in `.env`:
+Configure backend security in `.env`:
 
 ```env
-GEMINI_API_KEY=your-key
+AUTH_JWT_SECRET=replace-with-output-from-openssl-rand-hex-32
+API_KEY_ENCRYPTION_SECRET=use-a-second-openssl-rand-hex-32-output
+
+# Optional: used only by the offline PDF-ingestion command.
+GEMINI_API_KEY=optional-ingestion-key
 
 # Conservative PDF-ingestion pacing. Check your active project limits in
 # Google AI Studio before increasing these values.
@@ -60,7 +89,8 @@ conservative local token estimate and enforces that estimated budget over a
 rolling minute. A Gemini `429`, timeout, or temporary server error is retried
 with exponential backoff, jitter, and the provider's `Retry-After` value when
 one is supplied. Runtime query embeddings do not use the slow ingestion
-limiter, so normal chat retrieval remains responsive.
+limiter, so normal chat retrieval remains responsive and uses the signed-in
+user's key.
 
 Gemini limits are enforced per project and can include requests per minute,
 tokens per minute, and requests per day. The local limiter cannot account for
@@ -78,13 +108,16 @@ Authentication is owned by FastAPI and stored locally in the `users` and
 ```env
 DATABASE_URL=sqlite:///data/electromentor.db
 AUTH_JWT_SECRET=replace-with-output-from-openssl-rand-hex-32
+API_KEY_ENCRYPTION_SECRET=replace-with-a-different-openssl-rand-hex-32-output
 AUTH_JWT_ISSUER=electromentor-api
 AUTH_JWT_AUDIENCE=electromentor-web
 AUTH_ACCESS_TOKEN_MINUTES=15
 AUTH_REFRESH_TOKEN_DAYS=14
 ```
 
-Generate the secret with `openssl rand -hex 32`. Registration and login return
+Generate both secrets separately with `openssl rand -hex 32`. Keep the API-key
+encryption secret stable across deployments; changing it makes saved keys
+unreadable, so users must delete and add them again. Registration and login return
 a short-lived backend-signed access JWT and an opaque, rotating refresh token.
 Only the refresh token's SHA-256 digest is stored in SQLite. The endpoints are:
 
@@ -94,6 +127,9 @@ POST /api/v1/auth/login
 POST /api/v1/auth/refresh
 POST /api/v1/auth/logout
 GET  /api/v1/auth/me
+GET  /api/v1/settings/gemini-api-key
+PUT  /api/v1/settings/gemini-api-key
+DELETE /api/v1/settings/gemini-api-key
 ```
 
 Send the access JWT to protected backend endpoints with:
