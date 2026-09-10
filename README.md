@@ -46,6 +46,27 @@ application logs can be queried with `{service="backend"}` and errors with
 for the metric contract, dashboard coverage, logging labels, and operational
 checks.
 
+### Company registry deployment
+
+The production Compose file pulls the versioned frontend and backend images
+from the company registry and never builds application images on the server.
+Clone the complete repository so the monitoring configuration and provisioned
+Grafana dashboard are present, then run:
+
+```bash
+docker login registry.acimisai.com
+cp .env.example .env
+# Set independent backend secrets and a strong GRAFANA_ADMIN_PASSWORD in .env.
+docker compose -f prod.docker-compose.yml config --quiet
+docker compose -f prod.docker-compose.yml up -d
+docker compose -f prod.docker-compose.yml ps
+```
+
+The deployment uses
+`registry.acimisai.com/electro_mentor_ai-frontend:v1.0.0` and
+`registry.acimisai.com/electro_mentor_ai-backend:v1.0.0`. Docker Compose pulls
+the configured images whenever the production stack is started.
+
 ## Frontend quick start
 
 Use Node.js 22 or newer:
