@@ -59,6 +59,29 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    gemini_api_credential: Mapped["GeminiApiCredential | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class GeminiApiCredential(Base):
+    """One encrypted Gemini API credential owned by one local user."""
+
+    __tablename__ = "gemini_api_credentials"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="gemini_api_credential")
 
 
 class RefreshSession(Base):

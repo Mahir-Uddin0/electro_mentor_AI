@@ -87,6 +87,7 @@ def test_database_contains_local_application_tables(
     assert set(inspect(session.bind).get_table_names()) == {
         "chat_messages",
         "conversations",
+        "gemini_api_credentials",
         "practical_assessments",
         "refresh_sessions",
         "tasks",
