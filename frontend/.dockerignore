@@ -1,0 +1,12 @@
+.env
+.env.*
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+.DS_Store
+README.md
+ui_ux/
+prd/
+assesment_video/

@@ -1,0 +1,16 @@
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+tests/
+*.egg-info/
+dist/
+build/
+
+# Never copy local credentials, the SQLite database, or private uploads.
+data/*.db
+data/*.db-*
+data/practical_assessment_videos/
