@@ -1,11 +1,13 @@
 # ElectroMentor AI
 
-This repository contains two applications:
+This repository contains two applications and a Docker Compose observability stack:
 
 - `frontend/` — the Next.js 16 and React 19 product UI, local authentication
   session client, and backend API client.
 - `backend/` — the FastAPI, local SQLite authentication, Gemini RAG, and
   user-owned feature services.
+- `monitoring/` — Prometheus metrics, Loki logs collected by Alloy, and a
+  provisioned Grafana dashboard.
 
 See [`frontend/README.md`](frontend/README.md) for frontend setup, environment variables, and the complete 20-route screen map.
 
@@ -16,21 +18,33 @@ frontend proxies browser API calls to the backend over the private Compose
 network, so no public hostname or Nginx configuration is required.
 
 ```bash
+# New installations only; do not overwrite an existing .env.
 cp .env.example .env
-# Set independent AUTH_JWT_SECRET and API_KEY_ENCRYPTION_SECRET values.
+# Set independent backend secrets and a strong GRAFANA_ADMIN_PASSWORD.
+docker compose config --quiet
 docker compose up --build -d
 docker compose ps
 ```
 
 Open the frontend at `http://SERVER_HOST:3000`. FastAPI is exposed at
 `http://SERVER_HOST:8000`, and its existing health endpoint is
-`http://SERVER_HOST:8000/api/v1/health`.
+`http://SERVER_HOST:8000/api/v1/health`. Grafana is exposed at
+`http://SERVER_HOST:3001` by default; set `GRAFANA_PORT` if that host port is
+already occupied. Prometheus, Loki, and Alloy are available only to services on
+the Compose network.
 
-The named `backend_data` volume is mounted at `/app/data`. It retains the
-SQLite database, uploaded assessment videos, generated RAG data, and bundled
-document libraries when the backend container is recreated. To deploy a new
-image without deleting that data, use `docker compose up --build -d`; do not
-run `docker compose down --volumes` unless the stored data should be erased.
+Named volumes retain backend data, Prometheus time series, Grafana state, Loki
+logs, and Alloy read positions when containers are recreated. To deploy a new
+image without deleting that data, use `docker compose up --build -d`; do not run
+`docker compose down --volumes` unless all stored application and monitoring
+data should be erased.
+
+The FastAPI metrics endpoint is `GET /metrics`. Grafana automatically provisions
+Prometheus and Loki plus the **ElectroMentor.AI** dashboard. In Grafana Explore,
+application logs can be queried with `{service="backend"}` and errors with
+`{service="backend"} |= "ERROR"`. See [`monitoring/README.md`](monitoring/README.md)
+for the metric contract, dashboard coverage, logging labels, and operational
+checks.
 
 ## Frontend quick start
 
