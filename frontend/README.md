@@ -1,155 +1,173 @@
-# ElectroMentor.AI frontend
+# ElectroMentor AI frontend
 
-The frontend is a Next.js App Router application for the ElectroMentor learning platform. It includes the 20 product screens represented by the UI/UX references, authentication through the FastAPI backend, and a typed API client that forwards the signed-in user's backend-issued access token.
+The ElectroMentor frontend is an installable Next.js application for practical
+electrical learning. It provides an English/Bangla interface for the AI mentor,
+photo analysis, safety resources, guides, practical assessments, and personal
+task tracking.
 
-## Local setup
+## Technology
 
-Use Node.js 22 or newer.
+- Next.js 16 App Router
+- React 19
+- TypeScript 7
+- Tailwind CSS 4
+- Lucide icons
+- Native web app manifest and service worker
+
+## Start locally
+
+### Requirements
+
+- Node.js 22 or newer
+- npm
+- The FastAPI backend at `http://127.0.0.1:8000` for registration, sign-in, and
+  all real feature APIs
 
 ```bash
 cd frontend
-npm install
 cp .env.example .env.local
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. Keep `NEXT_PUBLIC_USE_MOCK_API=true` if you want the login/register screens to offer preview access and the unfinished general API routes to use local mock handlers. Registration and sign-in always use the FastAPI backend.
+Open <http://localhost:3000>.
+
+The example configuration enables a safe preview entry point and mock dashboard
+data. Registration and sign-in always call FastAPI. The implemented chat,
+photo, checklist, guide, task, and assessment clients use their real backend
+routes by default.
+
+For a completely backend-driven run, set:
+
+```dotenv
+NEXT_PUBLIC_USE_MOCK_API=false
+```
 
 ## Environment variables
 
-```dotenv
-NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000
-NEXT_PUBLIC_USE_MOCK_API=true
-NEXT_PUBLIC_USE_MOCK_CHAT_API=false
-NEXT_PUBLIC_USE_MOCK_PHOTO_API=false
-NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=false
-NEXT_PUBLIC_USE_MOCK_GUIDE_API=false
-NEXT_PUBLIC_USE_MOCK_TASK_API=false
-NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false
-```
+| Variable | Example default | Effect |
+| --- | --- | --- |
+| `NEXT_PUBLIC_BACKEND_URL` | `http://127.0.0.1:8000` | FastAPI origin used by browser requests |
+| `NEXT_PUBLIC_USE_MOCK_API` | `true` | Enables preview access and mock data for general unfinished endpoints |
+| `NEXT_PUBLIC_USE_MOCK_CHAT_API` | `false` | Uses mock conversation storage and responses when `true` |
+| `NEXT_PUBLIC_USE_MOCK_PHOTO_API` | `false` | Uses deterministic photo-analysis preview data when `true` |
+| `NEXT_PUBLIC_USE_MOCK_CHECKLIST_API` | `false` | Mocks both checklist browsing and generation when `true` |
+| `NEXT_PUBLIC_USE_MOCK_GUIDE_API` | `false` | Uses preview guide data instead of the PDF API when `true` |
+| `NEXT_PUBLIC_USE_MOCK_TASK_API` | `false` | Uses preview tasks instead of SQLite-backed tasks when `true` |
+| `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API` | `false` | Uses the assessment preview workflow when `true` |
 
-`NEXT_PUBLIC_USE_MOCK_API` controls the unfinished dashboard and AI checklist-generation endpoints. Conversation history, photo analysis, the PDF libraries, the task tracker, and learner-profile assessment have separate feature switches, so they can use FastAPI while the remaining screens use preview data. Keep their feature-specific switches set to `false` for the real authenticated APIs.
+These values are embedded in the browser bundle during `npm run build`; rebuild
+the frontend after changing them. In Docker, the application uses
+`NEXT_PUBLIC_BACKEND_URL=/backend-api`, and the Next.js rewrite sends that path
+to FastAPI inside the Compose network.
 
-The API client stores the FastAPI session in browser local storage. Before every
-real backend request it checks the access-token expiry and uses
-`POST /api/v1/auth/refresh` when necessary. Refresh tokens rotate on every
-successful refresh. A rejected refresh or backend `401` clears the browser
-session and sends the user to `/login?reason=session_expired`. Login state is
-synchronized across browser tabs.
+## Product areas and routes
 
-The authentication routes are:
+| Area | Routes |
+| --- | --- |
+| Public | `/`, `/login`, `/register`, `/offline` |
+| Workspace | `/dashboard`, `/settings` |
+| AI mentor | `/assistant` |
+| Photo analysis | `/photo-analysis`, `/photo-analysis/review`, `/photo-analysis/results/[id]` |
+| Safety checklists | `/safety-checklists`, `/safety-checklists/generate`, `/safety-checklists/[id]` |
+| Guides | `/guides`, `/guides/[id]` |
+| Practice tracker | `/practice-tracker` |
+| Practical assessments | `/assessments/history`, `/assessments/new/upload`, `/assessments/new/questions`, `/assessments/new/answers`, `/assessments/new/results`, `/assessments/new/skills`, `/assessments/new/suggestions` |
 
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/refresh`
-- `POST /api/v1/auth/logout`
-- `GET /api/v1/auth/me`
+`/guides/lighting-circuit-design` and
+`/safety-checklists/house-wiring` remain available as dedicated reference
+screens. Dynamic `[id]` routes load backend-provided PDFs or analysis results.
 
-FastAPI issues and verifies the access JWT. The frontend does not contain the
-JWT signing secret and does not verify token signatures itself.
+## Authentication and API behavior
 
-Protected route gating is client-side because this version stores the token
-response in browser local storage. Do not render sensitive user data into a
-protected page at build time. A future HttpOnly-cookie/BFF design can move the
-route decision back to the Next.js server and further reduce token exposure to
+FastAPI owns registration, credentials, JWT signing, refresh sessions, and user
+authorization. The frontend stores the returned session in browser local
+storage, refreshes an expiring access token through `/api/v1/auth/refresh`, and
+synchronizes login state across tabs. Refresh tokens rotate after every
+successful refresh.
+
+If refresh fails or a real API request returns `401`, the client clears the
+session and redirects to `/login?reason=session_expired`. It never contains the
+JWT signing secret and does not attempt to verify signatures in the browser.
+
+Protected-route gating is client-side because tokens are stored in local
+storage. Do not render private user data into protected pages during a static or
+server build. A future HttpOnly-cookie/BFF design would reduce token exposure to
 browser JavaScript.
 
-Conversation history uses these FastAPI routes under `/api/v1`:
+Real feature requests include both headers:
 
-- `GET /conversations` and `POST /conversations`
-- `GET`, `PATCH`, and `DELETE /conversations/{conversation_id}`
-- `POST /conversations/{conversation_id}/messages`
+```http
+Authorization: Bearer <access-token>
+Accept-Language: en
+```
 
-Photo fault detection sends an authenticated multipart request to `POST /photo-analysis` with the selected file in the `image` field. Accepted formats are JPG, PNG, WebP, HEIC, and HEIF up to 14 MB. Completed reports are retained only for the current user and browser session; the backend does not persist photo reports yet.
+The language header changes supported AI text between English (`en`) and Bangla
+(`bn`) while leaving JSON keys and enum values unchanged. A backend `428`
+response opens the Gemini-key prompt; users can save their key from **Settings**.
 
-The safety-checklist library loads live PDF metadata from `GET /safety-checklists` and fetches a selected file from `GET /safety-checklists/{checklist_id}/file`. The generator sends the task to `POST /safety-checklists/generate` and renders the returned Gemini-generated sections and prioritized items. All requests carry the current backend access token. PDFs can be viewed inside the application or downloaded without exposing a server filesystem path.
+## Backend integrations
 
-The wiring and circuit guide library follows the same authenticated flow through `GET /guides` and `GET /guides/{guide_id}/file`. Titles, descriptions, categories, page counts, file sizes, update times, and IDs come from the backend PDF catalog rather than static frontend data.
+- **Conversations:** persistent conversation CRUD and grounded messages through
+  `/api/v1/conversations`.
+- **Photo analysis:** multipart upload to `/api/v1/photo-analysis` in the
+  `image` field. Accepted types are JPG, PNG, WebP, HEIC, and HEIF, up to 14 MB.
+  Completed reports are held only in the current browser session.
+- **Checklists:** list and stream PDFs from `/api/v1/safety-checklists`, or send
+  a task to `/api/v1/safety-checklists/generate`.
+- **Guides:** search backend PDF metadata and stream a selected file through
+  `/api/v1/guides/{guide_id}/file`.
+- **Tasks:** user-scoped CRUD through `/api/v1/tasks`; task status progresses
+  from `upcoming` to `in_progress` to `completed`.
+- **Assessments:** upload a required MP4, MOV, or WebM video up to 100 MB,
+  generate ten questions and supported answers, edit answers, evaluate, and
+  browse completed history through `/api/v1/practical-assessments`.
 
-The Task Tracker uses authenticated, user-scoped FastAPI routes under `/api/v1`:
-
-- `GET /tasks` and `POST /tasks`
-- `PATCH /tasks/{task_id}` and `DELETE /tasks/{task_id}`
-
-Tasks are grouped into Upcoming, In Progress, and Completed sections. The first two sections are sorted by priority and due date, and changing a task's status moves it to the matching section without a page reload. Keep `NEXT_PUBLIC_USE_MOCK_TASK_API=false` to persist tasks in the backend's local SQLite database through FastAPI.
-
-The practical-work assessment uses authenticated FastAPI routes under `/api/v1`:
-
-- `GET /practical-assessments/me` loads the current user's active draft or latest completed assessment.
-- `GET /practical-assessments/history` and `GET /practical-assessments/{assessment_id}` load completed SQLite-backed results.
-- `POST /practical-assessments` starts an assessment from a required MP4, MOV, or WebM work video up to 100 MB.
-- `POST /practical-assessments/{assessment_id}/generate-answers` analyzes the privately stored video.
-- `PUT /practical-assessments/{assessment_id}/answers` saves all ten editable answers.
-- `POST /practical-assessments/{assessment_id}/evaluate` scores and completes the assessment.
-
-The assessment screens share one provider, so a draft can move between stages
-without static placeholder data. Gemini fills only answers supported by the
-video; every answer remains user-editable before evaluation. The backend stores
-assessment records in SQLite and videos in a private server directory outside
-the frontend's public files. Keep `NEXT_PUBLIC_USE_MOCK_ASSESSMENT_API=false` to
-use this backend flow.
-
-The remaining temporary frontend contract expects `GET /dashboard`. While the general mock switch is enabled, the matching local handler under `/api/mock/*` supplies its deterministic response. Set `NEXT_PUBLIC_USE_MOCK_CHECKLIST_API=true` only when a deterministic checklist-generator preview is desired instead of Gemini.
+Assessment pages share a client provider, allowing a draft to move through the
+workflow without static placeholders. Uploaded videos stay in the backend's
+private storage and are never copied into `public/`.
 
 ## Progressive Web App
 
-Production builds include a native web app manifest and service worker, so the
-frontend can be installed in standalone mode from supported Android, iOS, and
-desktop browsers. Service workers and installation require HTTPS in production;
-`localhost` is treated as a secure context for local testing. The service worker
-registers only in a production build, so test it with:
+The production build includes a manifest and service worker. Supported browsers
+can install it on Android, iOS, and desktop. Production installation requires
+HTTPS; `localhost` is treated as a secure context for development.
+
+The service worker registers only in a production build:
 
 ```bash
 npm run build
 npm run start
 ```
 
-The offline cache contains only the `/offline` fallback, the manifest, PWA icons,
-and the hashed Next.js static files required to render that fallback. API
-responses, authentication sessions or tokens, user data, conversations, AI responses,
-uploaded media, and analysis results are intentionally never cached. AI chat,
-photo review, authentication, database operations, and all mutations remain
-online-only.
+Its cache is deliberately narrow: the offline fallback, manifest, icons, and
+hashed Next.js assets needed to render that fallback. API responses, tokens,
+conversations, AI results, uploaded media, and other user data are never cached.
+All AI features and mutations remain online-only.
 
-The current install icons are brand-colored placeholders in
-`public/icons/icon-192.png` and `public/icons/icon-512.png`; their editable source
-is `public/icons/icon-source.svg`. Replace the PNG files with final artwork while
-keeping the same names and exact dimensions (and keeping important content inside
-the platform-safe center area).
+When intentionally changing precached assets or cache behavior, increment
+`CACHE_NAME` in `public/service-worker.js`. Replace the placeholder install
+icons while preserving these paths and dimensions:
 
-When intentionally changing precached resources or service-worker cache behavior,
-increment `CACHE_NAME` in `public/service-worker.js` (for example,
-`electromentor-v1` to `electromentor-v2`). Activation removes older
-`electromentor-*` caches.
+- `public/icons/icon-192.png` — 192 × 192
+- `public/icons/icon-512.png` — 512 × 512
 
-## Product routes
+## Commands
 
-1. `/login`
-2. `/register`
-3. `/dashboard`
-4. `/guides`
-5. `/guides/lighting-circuit-design`
-6. `/assistant`
-7. `/photo-analysis`
-8. `/photo-analysis/review`
-9. `/photo-analysis/results/demo`
-10. `/safety-checklists`
-11. `/safety-checklists/generate`
-12. `/safety-checklists/house-wiring`
-13. `/practice-tracker`
-14. `/settings`
-15. `/assessments/new/upload`
-16. `/assessments/new/questions`
-17. `/assessments/new/answers`
-18. `/assessments/new/results`
-19. `/assessments/new/suggestions`
-20. `/assessments/new/checklist`
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the development server |
+| `npm run typecheck` | Run TypeScript without emitting files |
+| `npm run build` | Create the production build with webpack |
+| `npm run start` | Serve the production build |
 
-## Validation
+Before opening a pull request or deploying:
 
 ```bash
 npm run typecheck
 npm run build
 ```
 
-For real backend requests, run the frontend from `http://localhost:3000` so it matches the backend's configured CORS origin.
+For real browser-to-backend requests, use `http://localhost:3000` so the origin
+matches the backend's default CORS configuration. See the
+[project README](../README.md) for backend setup and full-stack Docker usage.

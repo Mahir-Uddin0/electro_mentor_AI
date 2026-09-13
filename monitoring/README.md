@@ -1,77 +1,102 @@
-# ElectroMentor.AI monitoring
+# ElectroMentor AI monitoring
 
-The Compose stack keeps metrics and logs on the same private Docker network as
-the application:
+ElectroMentor ships with an automatically provisioned observability stack for
+the Docker Compose deployment. Prometheus collects API metrics, Alloy forwards
+opted-in container logs to Loki, and Grafana provides dashboards and log
+exploration.
 
 ```text
-backend:8000/metrics <- prometheus:9090 <- grafana:3000
-Docker logs          -> alloy:12345    -> loki:3100 -> grafana:3000
-                                                    host Grafana port: 3001
+FastAPI /metrics ──> Prometheus ──> Grafana
+                                      ^
+backend/frontend logs ──> Alloy ──> Loki
 ```
 
-Only Grafana is published on a new host port. Prometheus, Loki, and Alloy use
-Compose DNS names and are not directly exposed by the host.
+Prometheus, Loki, and Alloy remain on the private `electromentor` Compose
+network. Only Grafana is published to the host, on port `3001` by default.
 
-## Start and verify
+## Start the stack
 
-For a new installation, copy the root environment example. For an existing
-installation, preserve `.env` and add the three `GRAFANA_*` entries from
-`.env.example`. Generate independent secrets, place them in `.env`, and then
-start the application and monitoring services together:
+Monitoring starts with the application; there is no separate Compose command.
+From the repository root:
 
 ```bash
-cp .env.example .env      # new installations only
+cp .env.example .env      # first installation only
 openssl rand -hex 32       # AUTH_JWT_SECRET
 openssl rand -hex 32       # API_KEY_ENCRYPTION_SECRET
 openssl rand -base64 32    # GRAFANA_ADMIN_PASSWORD
+```
+
+Save the generated values in `.env`, then run:
+
+```bash
 docker compose config --quiet
 docker compose up --build -d
 docker compose ps
 ```
 
-Open Grafana at `http://localhost:3001` by default (or the host port configured
-by `GRAFANA_PORT`) and sign in using `GRAFANA_ADMIN_USER` and
-`GRAFANA_ADMIN_PASSWORD`. Grafana provisions both data sources and the
-**ElectroMentor.AI** dashboard on first startup. The dashboard refreshes every
-15 seconds and defaults to the most recent six hours.
+Open <http://localhost:3001> and sign in with `GRAFANA_ADMIN_USER` and
+`GRAFANA_ADMIN_PASSWORD`. Change the published port with `GRAFANA_PORT` if 3001
+is already in use.
 
-Prometheus scrapes the backend every 15 seconds. Its target is intentionally the
-internal address `backend:8000/metrics`; Grafana uses `prometheus:9090` and
-`loki:3100` internally.
+Grafana provisions the Prometheus and Loki data sources and the
+**ElectroMentor.AI** dashboard on first startup. The dashboard defaults to the
+last six hours and refreshes every 15 seconds.
+
+> Grafana stores its initial administrator credentials in `grafana_data`.
+> Changing the environment variables later does not reset an already-created
+> administrator account.
+
+## Services
+
+| Service | Internal address | Host access | Role |
+| --- | --- | --- | --- |
+| Prometheus | `prometheus:9090` | Not published | Scrapes metrics every 15 seconds |
+| Loki | `loki:3100` | Not published | Stores application logs for 30 days |
+| Alloy | `alloy:12345` | Not published | Discovers and forwards selected Docker logs |
+| Grafana | `grafana:3000` | `localhost:${GRAFANA_PORT:-3001}` | Dashboards and Explore |
+| Backend metrics | `backend:8000/metrics` | `localhost:8000/metrics` | Application metric source |
 
 ## Metrics
 
-The backend exposes a deliberately small, low-cardinality metric set:
+The backend deliberately exposes a small, low-cardinality metric set:
 
-- `http_requests_total` and `http_request_duration_seconds` use the HTTP method,
-  normalized FastAPI route template, and status code. Raw URL paths are never
-  used as labels, and the `/metrics` scrape itself is excluded.
-- `ai_feature_requests_total` and `ai_feature_request_duration_seconds` use only
-  a bounded feature name and `success`, `error`, or `cancelled` status. They
-  cover the real assistant, photo-analysis, safety-checklist, and practical
-  assessment AI operations.
-- `rag_requests_total` and `rag_request_duration_seconds` measure the retrieval
-  performed for assistant context.
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `http_requests_total` | method, normalized route, status code | API request volume |
+| `http_request_duration_seconds` | method, normalized route, status code | API request latency |
+| `ai_feature_requests_total` | bounded feature name, result status | AI operation volume and outcome |
+| `ai_feature_request_duration_seconds` | bounded feature name, result status | AI operation latency |
+| `rag_requests_total` | bounded result status | Retrieval volume and outcome |
+| `rag_request_duration_seconds` | bounded result status | Retrieval latency |
 
-No prompts, tokens, API keys, user identifiers, conversation IDs, filenames, or
-other user-controlled values are Prometheus labels.
+The `/metrics` scrape is excluded from HTTP request instrumentation. Raw URL
+paths are normalized to FastAPI route templates, preventing IDs from creating
+unbounded series. Prometheus labels never contain prompts, API keys, tokens,
+user IDs, conversation IDs, or filenames.
 
-The provisioned dashboard contains request volume, error rates, averages, and
-p95 latency panels for the API, assistant, RAG, and photo analysis. Checklist
-and practical-assessment series are available for ad hoc PromQL using the
-`feature` label without adding a large set of narrowly used panels.
+The provisioned dashboard covers API volume, error rate, average and p95
+latency, assistant generation, RAG, and photo analysis. Checklist and practical
+assessment series remain available for ad hoc PromQL through the bounded
+`feature` label.
 
 ## Logs
 
-Alloy discovers only Compose containers carrying the
-`com.electromentor.logs=true` label. It maps Docker Compose metadata to these
-stable Loki labels:
+Alloy discovers only containers labeled:
 
-- `service`: the Compose service, such as `backend` or `frontend`
-- `compose_project`: the Compose project name
-- `container`: the generated container name
+```yaml
+com.electromentor.logs: "true"
+```
 
-Useful Grafana Explore queries include:
+The current Compose files opt in the `backend` and `frontend` services. Alloy
+attaches only stable deployment metadata:
+
+| Label | Example |
+| --- | --- |
+| `service` | `backend` |
+| `compose_project` | `electro_mentor_ai` |
+| `container` | Compose-generated container name |
+
+Useful queries in **Grafana → Explore → Loki**:
 
 ```logql
 {service="backend"}
@@ -79,42 +104,77 @@ Useful Grafana Explore queries include:
 {service="frontend"}
 ```
 
-Alloy mounts `/var/run/docker.sock` read-only and never promotes request or user
-data into labels. Application logs still must not include credentials or bearer
-tokens.
+Alloy mounts `/var/run/docker.sock` read-only for container discovery. Avoid
+logging credentials, bearer tokens, uploaded content, or other sensitive user
+data even though those fields are not promoted to Loki labels.
 
-## Persistence and configuration
+## Persistence and retention
 
-Configuration is committed under `monitoring/`; runtime data is stored only in
-named Docker volumes:
+| Volume | Data |
+| --- | --- |
+| `prometheus_data` | Prometheus time series, retained for 30 days |
+| `loki_data` | Loki chunks and indexes, retained for 30 days |
+| `grafana_data` | Grafana users and state |
+| `alloy_data` | Alloy log read positions |
+| `backend_data` | SQLite, Chroma, and private backend application files |
 
-- `prometheus_data` for time series (30-day retention)
-- `grafana_data` for Grafana state
-- `loki_data` for logs (30-day retention)
-- `alloy_data` for log read positions
+`docker compose down` and container recreation preserve these named volumes.
+`docker compose down --volumes` permanently deletes them and should be used only
+when all application and monitoring data can be discarded.
 
-The existing `backend_data` volume remains unchanged. Container recreation and
-`docker compose down` preserve named volumes. `docker compose down --volumes`
-permanently removes all of them and should be used only when that data is no
-longer needed.
+Committed configuration lives here:
 
-Grafana administrator values belong in the uncommitted root `.env`. Grafana
-stores the initial administrator account in `grafana_data`; changing the
-environment variable later does not reset an already initialized Grafana
-database.
+```text
+monitoring/
+├── alloy/config.alloy
+├── loki/config.yml
+├── prometheus/prometheus.yml
+└── grafana/
+    ├── dashboards/electromentor-ai.json
+    └── provisioning/
+        ├── dashboards/dashboards.yml
+        └── datasources/datasources.yml
+```
+
+Dashboard JSON and provisioning files are mounted read-only. Make durable
+dashboard changes in the committed JSON rather than only through the Grafana UI.
+
+## Operational checks
+
+```bash
+# Container and health status
+docker compose ps
+
+# Application logs
+docker compose logs --tail=100 backend frontend
+
+# Monitoring logs
+docker compose logs --tail=100 prometheus loki alloy grafana
+
+# Confirm the backend metric endpoint
+curl --fail http://localhost:8000/metrics
+
+# Confirm Grafana health
+curl --fail http://localhost:3001/api/health
+```
+
+If the dashboard has no metrics, confirm that `backend` is healthy and inspect
+the Prometheus logs. If logs are absent, confirm the service has the opt-in label
+and inspect Alloy and Loki logs. On hosts without `/var/run/docker.sock`, Alloy's
+Docker log discovery must be adapted to the container runtime.
 
 ## Registry deployment
 
-Prometheus, Loki, Alloy, and Grafana use pinned public images. To publish the
-application images to your own registry, set `BACKEND_IMAGE=host/name:tag` and
-`FRONTEND_IMAGE=host/name:tag` in `.env`, then run:
+`prod.docker-compose.yml` pulls the versioned frontend and backend images while
+using the same pinned monitoring images and configuration. Keep this directory
+on the deployment host, because Compose bind-mounts its files into the monitoring
+containers.
 
 ```bash
-docker compose build backend frontend
-docker compose push backend frontend
+docker compose -f prod.docker-compose.yml config --quiet
+docker compose -f prod.docker-compose.yml pull
+docker compose -f prod.docker-compose.yml up -d
 ```
 
-On the deployment host, use the same two image variables and pull before
-starting the stack. Keep the repository's Compose and `monitoring/` files with
-the deployment because they provide the runtime topology and provisioned
-configuration.
+Return to the [project README](../README.md) for the complete deployment and
+application setup.
