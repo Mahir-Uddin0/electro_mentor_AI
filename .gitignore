@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+.DS_Store
 .env
 .pytest_cache/
 .ruff_cache/
@@ -17,10 +18,10 @@ backend/data/*.db-shm
 backend/data/*.db-wal
 backend/data/*.db-journal
 backend/data/practical_assessment_videos/
-data/raw_pdfs/
-backend/data/markdown/
-backend/data/chunks/
-backend/data/raw_pdfs/
+# data/raw_pdfs/
+# backend/data/markdown/
+# backend/data/chunks/
+# backend/data/raw_pdfs/
 
 # Next.js frontend
 frontend/node_modules/
